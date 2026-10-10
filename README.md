@@ -48,6 +48,9 @@ The Decaid Plugins screen can also install the ZIP or folder as a local
 snapshot. Local installs are not tracked for updates; the GitHub branch and
 release paths are the supported update-aware choices.
 
+The repository and release ZIP keep `manifest.json` and `plugin.js` at their
+package root, as required by Decaid's plugin package resolver.
+
 License: GPL-3.0-or-later; the complete text is in `LICENSE`. Protocol and
 test behavior is derived from decentespresso/decaid pull request #848, with
 the original Decaid attribution retained in `NOTICE`.

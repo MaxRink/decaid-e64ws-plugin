@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-const source = fs.readFileSync(new URL('../mahlkoenig-e64.reaplugin/plugin.js', import.meta.url), 'utf8');
+const source = fs.readFileSync(new URL('../plugin.js', import.meta.url), 'utf8');
 function load(settings, fixture) {
   const registrations = [];
   const host = {devices: {register(definition, handlers) { registrations.push({definition, handlers}); return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:e64:${definition.instanceId}`}); }}};
