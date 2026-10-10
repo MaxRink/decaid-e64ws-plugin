@@ -88,6 +88,8 @@ jobs:
           printf '["stub-skin"]\n' > assets/bundled_skins/manifest.json
           : > assets/bundled_skins/stub-skin.zip
           flutter test test/e64_external_manifest_compat_test.dart test/plugins/e64_external_runtime_test.dart test/plugins/plugin_manager_transport_test.dart test/plugins/plugin_manager_transport_tls_test.dart test/plugins/plugin_manager_permissions_test.dart
+          flutter test test/plugin_loader_service_appstore_test.dart --plain-name secure
+          flutter test test/services/account/encrypted_credential_store_test.dart
 
   linux-runtime:
     name: Linux app and E64 mock smoke

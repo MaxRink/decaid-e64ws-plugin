@@ -61,6 +61,8 @@ The host job also executes this repository's real source through QuickJS against
 two loopback WebSocket peers, verifies diagnostics through the host HTTP bridge,
 and runs the host's transport, permission and TLS rejection suites. The Linux
 app job checks the normal installer, device APIs, error surfacing and lifecycle.
+The loader's secure-settings tests and encrypted credential-store persistence
+tests cover the storage boundary using synthetic credentials and temporary files.
 All of these checks run without hardware. `--no-account` app smoke uses volatile
 secure settings; it proves redaction and in-process reload, not secure-token
 persistence across an app restart.
