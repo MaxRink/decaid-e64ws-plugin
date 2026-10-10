@@ -128,6 +128,9 @@ jobs:
           XDG_CONFIG_HOME: ${{ runner.temp }}/e64-xdg/config
           XDG_CACHE_HOME: ${{ runner.temp }}/e64-xdg/cache
           XDG_STATE_HOME: ${{ runner.temp }}/e64-xdg/state
+          PLUGIN_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          PLUGIN_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          PLUGIN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
@@ -142,10 +145,10 @@ jobs:
           # Install the published branch through the same host path used by users.
           curl --fail -sS -X POST http://127.0.0.1:8080/api/v1/plugins/install/github-branch \
             -H 'content-type: application/json' \
-            --data '{"repo":"MaxRink/decaid-e64ws-plugin","branch":"main"}'
-          expected='${{ github.sha }}'
-          actual=$(curl --fail -sS https://api.github.com/repos/MaxRink/decaid-e64ws-plugin/commits/main | jq -r .sha)
-          test "$actual" = "$expected"
+            --data "{\"repo\":\"$PLUGIN_REPO\",\"branch\":\"$PLUGIN_REF\"}"
+          installed=$(curl --fail -sS http://127.0.0.1:8080/api/v1/plugins)
+          installed_sha=$(printf '%s' "$installed" | jq -r '.[] | select(.id == "mahlkoenig-e64.reaplugin") | .source.commit')
+          test "$installed_sha" = "$PLUGIN_SHA"
           curl --fail -sS -X POST http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/settings \
             -H 'content-type: application/json' \
             --data '{"InstancesJson":"[{\"id\":\"one\",\"name\":\"Mock One\",\"scheme\":\"ws\",\"host\":\"127.0.0.1\",\"port\":9997,\"pollMs\":0},{\"id\":\"two\",\"name\":\"Mock Two\",\"scheme\":\"ws\",\"host\":\"127.0.0.1\",\"port\":9998,\"pollMs\":0}]","TokensJson":"{\"one\":\"token-one\",\"two\":\"token-two\"}"}'
