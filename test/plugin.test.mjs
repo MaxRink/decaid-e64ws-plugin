@@ -52,11 +52,14 @@ test('diagnostics uses the host deviceId and validates read response shapes', as
   await new Promise((resolve) => setImmediate(resolve));
   answer(fixture, 1, {model: 'E64'});
   assert.equal((await read).status, 200);
+  assert.equal((await read).headers['X-E64-Observation-State'], 'live');
+  const receivedAt = (await read).headers['X-E64-Observation-Time'];
   const invalid = loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'logs'}});
   await new Promise((resolve) => setImmediate(resolve));
   const wrong = fixture.sent[2];
   fixture.events[0]({type: 'data', dataType: 'text', data: JSON.stringify({type: 'RequestLogMessagesResult', refId: wrong.msgId, data: []})});
   assert.equal((await invalid).status, 503);
+  assert.equal((await invalid).headers['X-E64-Observation-Time'], receivedAt);
   assert.equal((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'one'}})).status, 404);
   assert.equal((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'startMotor'}})).status, 400);
   assert.equal((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'POST', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'}})).status, 405);
@@ -135,6 +138,7 @@ test('malformed ready notification reports disconnection and clears observations
   await reconnect;
   const diagnostics = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'}});
   assert.deepEqual(Object.keys(JSON.parse(diagnostics.body)), ['state']);
+  assert.equal(diagnostics.headers['X-E64-Observation-State'], 'last-known');
   const malformed = fixture.events[fixture.events.length - 1]({type: 'data', dataType: 'text', data: '{'});
   await malformed;
   await new Promise((resolve) => setImmediate(resolve));

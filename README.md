@@ -103,6 +103,15 @@ disconnection. Reconnecting starts a fresh observation set. `read=config`,
 reply before returning it. Unsupported reads return 400, unknown instances 404,
 unsupported methods 405, and disconnected, timed-out or invalid read replies 503.
 
+Responses include `X-E64-Observation-State` (`live`, `last-known`, or `none`).
+`live` identifies a successful fresh read; cached observations are always
+`last-known`, including while a session remains connected. When present,
+`X-E64-Observation-Time` is the plugin receive time of the most recent valid
+observation. It is not a vendor timestamp, per-field capture time, or proof
+that the value was copied into shot history. Failed, malformed, and timed-out
+reads do not advance it; a new session clears it until a valid observation is
+received.
+
 A failed initial connection surfaces through Decaid's native device connection
 error and the REST `grinderConnectFailed` result. A malformed notification or
 polling failure disconnects that instance; stale socket events cannot update a

@@ -56,7 +56,7 @@ function createPlugin(host) {
     return "unknown";
   }
   function make(config) {
-    return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, connected: false, observations: {}};
+    return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, connected: false, observations: {}, lastObservationAt: null};
   }
   function clear(instance) { if (instance.poll !== null) clearTimeout(instance.poll); instance.poll = null; }
   function rejectAll(instance, reason) { for (const item of instance.pending.values()) { clearTimeout(item.timer); item.reject(new Error(reason)); } instance.pending.clear(); }
@@ -80,10 +80,11 @@ function createPlugin(host) {
     if (item.publish) {
       if (!message.data || typeof message.data !== "object" || Array.isArray(message.data)) { item.reject(new Error("E64 invalid state response")); return; }
       instance.observations.state = message.data;
+      instance.lastObservationAt = new Date().toISOString();
       instance.context.publish({state: stateOf(message.data)}).then(item.resolve, item.reject);
     } else {
       if (!message.data || typeof message.data !== "object" || Array.isArray(message.data)) { item.reject(new Error("E64 invalid read response")); return; }
-      instance.observations[item.name] = message.data; item.resolve(message.data);
+      instance.observations[item.name] = message.data; instance.lastObservationAt = new Date().toISOString(); item.resolve(message.data);
     }
   }
   function event(instance, epoch, handle, event) {
@@ -112,7 +113,7 @@ function createPlugin(host) {
   async function connect(instance, context) {
     await disconnect(instance);
     const epoch = ++instance.epoch; const transport = context.transport;
-    instance.context = context; instance.transport = transport; instance.observations = {};
+    instance.context = context; instance.transport = transport; instance.observations = {}; instance.lastObservationAt = null;
     try {
       const opened = await transport.open({kind: "websocket", url: url(instance.config)});
       if (epoch !== instance.epoch) { await transport.close(opened.handle).catch(() => {}); return; }
@@ -146,7 +147,8 @@ function createPlugin(host) {
       const read = request.query.read;
       if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "logs") return {status: 400, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unsupported read"})};
       const operation = read === undefined ? null : read;
-      return (operation ? requestRead(instance, operation) : Promise.resolve(instance.observations)).then((data) => ({status: 200, headers: {"Content-Type": "application/json"}, body: JSON.stringify(data)}), () => ({status: 503, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "E64 unavailable"})}));
+      const headers = (live) => ({"Content-Type": "application/json", "X-E64-Observation-State": live ? "live" : (instance.lastObservationAt ? "last-known" : "none"), ...(instance.lastObservationAt ? {"X-E64-Observation-Time": instance.lastObservationAt} : {})});
+      return (operation ? requestRead(instance, operation) : Promise.resolve(instance.observations)).then((data) => ({status: 200, headers: headers(Boolean(operation)), body: JSON.stringify(data)}), () => ({status: 503, headers: headers(false), body: JSON.stringify({error: "E64 unavailable"})}));
     }
   };
   function requestRead(instance, operation) { return request(instance, operation, false); }
