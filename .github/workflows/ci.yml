@@ -171,6 +171,10 @@ jobs:
           for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8080/api/v1/plugins >/dev/null && break; sleep 1; done
           test "$(curl -fsS http://127.0.0.1:8080/api/v1/plugins | jq 'length')" -ge 0
           ../scripts/run-dev-smoke.sh
+          if grep -Eq 'token-one|token-two|incorrect-fixture-token' "$RUNNER_TEMP/e64-app.log" "$RUNNER_TEMP/e64-one.log" "$RUNNER_TEMP/e64-two.log"; then
+            echo 'Synthetic credential leaked into app or mock logs' >&2
+            exit 1
+          fi
       - name: Upload runtime logs
         if: always()
         uses: actions/upload-artifact@v4
