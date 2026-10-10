@@ -148,8 +148,19 @@ jobs:
           mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
           node ../tools/e64-mock-server.mjs --id one --port 9997 --token token-one > "$RUNNER_TEMP/e64-one.log" 2>&1 & echo $! > "$RUNNER_TEMP/e64-one.pid"
           node ../tools/e64-mock-server.mjs --id two --port 9998 --token token-two > "$RUNNER_TEMP/e64-two.log" 2>&1 & echo $! > "$RUNNER_TEMP/e64-two.pid"
-          trap 'kill "$(cat "$RUNNER_TEMP/e64-one.pid")" "$(cat "$RUNNER_TEMP/e64-two.pid")" "$(cat "$RUNNER_TEMP/e64-app.pid")" 2>/dev/null || true' EXIT
-          for port in 9997 9998; do curl --fail --retry 20 --retry-delay 1 "http://127.0.0.1:$port/health"; done
+          trap 'for pidfile in "$RUNNER_TEMP/e64-one.pid" "$RUNNER_TEMP/e64-two.pid" "$RUNNER_TEMP/e64-app.pid"; do test -f "$pidfile" && kill "$(cat "$pidfile")" 2>/dev/null || true; done' EXIT
+          for port in 9997 9998; do
+            ready=false
+            for attempt in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:$port/health"; then ready=true; break; fi
+              sleep 1
+            done
+            if [ "$ready" != true ]; then
+              echo "mock $port failed to start" >&2
+              cat "$RUNNER_TEMP/e64-one.log" "$RUNNER_TEMP/e64-two.log" >&2 || true
+              exit 1
+            fi
+          done
           APP=./build/linux/x64/debug/bundle/decaid
           xvfb-run -a "$APP" --no-account --bypass-onboarding --serial > "$RUNNER_TEMP/e64-app.log" 2>&1 & echo $! > "$RUNNER_TEMP/e64-app.pid"
           for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8080/api/v1/plugins >/dev/null && break; sleep 1; done
@@ -173,3 +184,10 @@ jobs:
           curl --fail -sS -X POST http://127.0.0.1:9997/control -H 'content-type: application/json' --data '{"action":"close"}'
           sleep 2
           curl --fail -sS -X PUT http://127.0.0.1:8080/api/v1/devices/connect -H 'content-type: application/json' --data "{\"deviceId\":\"$id\"}" >/dev/null
+      - name: Upload runtime logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e64-linux-runtime-logs
+          path: ${{ runner.temp }}/e64-*.log
+          if-no-files-found: ignore
