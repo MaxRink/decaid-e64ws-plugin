@@ -20,6 +20,7 @@ const allowed = new Map([
   ['RequestNachineInfo', 'RequestNachineInfoResult'],
   ['RequestLogMessages', 'RequestLogMessagesResult'],
 ]);
+let rejectedCommands = 0;
 const counts = Object.fromEntries([...allowed.keys()].map(key => [key, 0]));
 
 function frame(text) {
@@ -32,7 +33,7 @@ function reply(socket, request) {
   const refId = request.msgId ?? request.messageId ?? request.id;
   const type = String(request.type ?? '');
   const responseType = allowed.get(type);
-  if (!responseType) { send(socket, {type: 'Error', refId, error: 'unsupported read command'}); return; }
+  if (!responseType) { rejectedCommands += 1; send(socket, {type: 'Error', refId, error: 'unsupported read command'}); return; }
   counts[type] += 1;
   if (controls.dropReplies) return;
   const result = type === 'RequestDriverConfig' ? {grindSize: 64, mode: 'mock'}
@@ -61,7 +62,7 @@ function parseFrames(socket, chunk) {
 }
 
 const server = http.createServer((request, response) => {
-  if (request.url === '/health') { response.writeHead(200, {'content-type': 'application/json'}); response.end(JSON.stringify({ok: true, id, state, counts})); return; }
+  if (request.url === '/health') { response.writeHead(200, {'content-type': 'application/json'}); response.end(JSON.stringify({ok: true, id, state, counts, rejectedCommands})); return; }
   if (request.method === 'POST' && request.url === '/control') {
     let body = ''; request.on('data', chunk => { body += chunk; });
     request.on('end', () => { try { const command = JSON.parse(body); if (command.state) state = String(command.state); if (command.dropReplies !== undefined) controls.dropReplies = Boolean(command.dropReplies); if (command.duplicateReplies !== undefined) controls.duplicateReplies = Boolean(command.duplicateReplies); if (command.delayMs !== undefined && Number.isInteger(command.delayMs) && command.delayMs >= 0 && command.delayMs <= 10000) controls.delayMs = command.delayMs; if (command.action === 'close') for (const socket of sockets) socket.end(); if (command.action === 'malformed') for (const socket of sockets) socket.write(frame('{malformed')); response.writeHead(200, {'content-type': 'application/json'}); response.end(JSON.stringify({ok: true, state, controls})); } catch { response.writeHead(400); response.end(); } }); return;
@@ -75,4 +76,4 @@ server.on('upgrade', (request, socket) => {
   socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
   sockets.add(socket); socket.on('data', chunk => parseFrames(socket, chunk)); socket.on('close', () => sockets.delete(socket)); socket.on('error', () => sockets.delete(socket));
 });
-server.listen(port, '127.0.0.1', () => console.log(`E64 mock ${id} listening on 127.0.0.1:${port}`));
+server.listen(port, '127.0.0.1', () => console.log(`E64 mock ${id} listening on 127.0.0.1:${server.address().port}`));

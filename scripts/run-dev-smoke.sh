@@ -165,6 +165,6 @@ request GET '/api/v1/devices/scan?connect=false' 200
 connect_device "$one"
 poll_json /api/v1/grinder/state '.state == "idle"'
 for mock in "$mock_one" "$mock_two"; do
-  curl --fail --silent --show-error "$mock/health" | jq -e '.commands | keys | all(. == "RequestDriverState" or . == "RequestDriverConfig" or . == "RequestNachineInfo" or . == "RequestLogMessages")' >/dev/null
+  curl --fail --silent --show-error "$mock/health" | jq -e '.rejectedCommands == 0 and (.counts | keys | all(. == "RequestDriverState" or . == "RequestDriverConfig" or . == "RequestNachineInfo" or . == "RequestLogMessages"))' >/dev/null
 done
 printf 'PASS: E64 hardware-free app scenarios\n'
