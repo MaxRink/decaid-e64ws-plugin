@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/plugin.test.mjs",
+    "test": "node --test test/plugin.test.mjs test/mock-server.test.mjs",
+    "mock": "node tools/e64-mock-server.mjs",
     "package": "zip -qr -FS mahlkoenig-e64-0.1.0.zip manifest.json plugin.js README.md NOTICE LICENSE"
   },
   "license": "GPL-3.0-or-later"

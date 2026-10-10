@@ -60,3 +60,22 @@ using Flutter 3.44.2.
 License: GPL-3.0-or-later; the complete text is in `LICENSE`. Protocol and
 test behavior is derived from decentespresso/decaid pull request #848, with
 the original Decaid attribution retained in `NOTICE`.
+
+## Public mock fixture
+
+`tools/e64-mock-server.mjs` is a dependency-free WebSocket fixture for local
+and CI checks. It implements the read-only request/reply contract, synthetic
+query-token authentication, state changes, disconnects, and malformed
+notifications:
+
+```bash
+node tools/e64-mock-server.mjs --id one --port 9997 --token token-one
+curl -X POST http://127.0.0.1:9997/control \
+  -H 'content-type: application/json' --data '{"state":"grinding"}'
+```
+
+The fixture is test infrastructure only, not a production E64 emulator. It
+does not weaken `wss` certificate validation in the plugin. The Linux CI job
+builds the pinned Decaid host, runs it under Xvfb with fresh XDG directories,
+installs this public branch through the normal host installer, connects a
+synthetic instance, reads machine information, and exercises close/reconnect.

@@ -85,3 +85,76 @@ jobs:
           printf '["stub-skin"]\n' > assets/bundled_skins/manifest.json
           : > assets/bundled_skins/stub-skin.zip
           flutter test test/e64_external_manifest_compat_test.dart
+
+  linux-runtime:
+    name: Linux app and E64 mock smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
+        with:
+          repository: decentespresso/decaid
+          ref: af4e99524ad7731dbdb7db4540cd272bc91da038
+          path: decaid
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.44.2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - name: Install Linux runtime dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libsecret-1-dev xvfb jq
+      - name: Prepare pinned host and build Linux app
+        working-directory: decaid
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ./scripts/fetch_dye2_plugin.sh
+          ./scripts/fetch_shot_upload_plugin.sh
+          ./scripts/fetch_dcamp_plugin.sh
+          mkdir -p assets/bundled_skins
+          printf '["stub-skin"]\n' > assets/bundled_skins/manifest.json
+          : > assets/bundled_skins/stub-skin.zip
+          # The app runtime smoke is loopback-only; this patch exists only in the CI clone.
+          sed -i 's/InternetAddress.anyIPv4/InternetAddress.loopbackIPv4/g' lib/src/services/webserver_service.dart
+          flutter pub get
+          flutter build linux --debug --dart-define=simulate=machine,scale --no-pub
+      - name: Run isolated app against two public-contract mock grinders
+        working-directory: decaid
+        env:
+          XDG_DATA_HOME: ${{ runner.temp }}/e64-xdg/data
+          XDG_CONFIG_HOME: ${{ runner.temp }}/e64-xdg/config
+          XDG_CACHE_HOME: ${{ runner.temp }}/e64-xdg/cache
+          XDG_STATE_HOME: ${{ runner.temp }}/e64-xdg/state
+        run: |
+          set -euo pipefail
+          mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_STATE_HOME"
+          node ../tools/e64-mock-server.mjs --id one --port 9997 --token token-one > "$RUNNER_TEMP/e64-one.log" 2>&1 & echo $! > "$RUNNER_TEMP/e64-one.pid"
+          node ../tools/e64-mock-server.mjs --id two --port 9998 --token token-two > "$RUNNER_TEMP/e64-two.log" 2>&1 & echo $! > "$RUNNER_TEMP/e64-two.pid"
+          trap 'kill "$(cat "$RUNNER_TEMP/e64-one.pid")" "$(cat "$RUNNER_TEMP/e64-two.pid")" "$(cat "$RUNNER_TEMP/e64-app.pid")" 2>/dev/null || true' EXIT
+          for port in 9997 9998; do curl --fail --retry 20 --retry-delay 1 "http://127.0.0.1:$port/health"; done
+          APP=./build/linux/x64/debug/bundle/decaid
+          xvfb-run -a "$APP" --no-account --bypass-onboarding --serial > "$RUNNER_TEMP/e64-app.log" 2>&1 & echo $! > "$RUNNER_TEMP/e64-app.pid"
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8080/api/v1/plugins >/dev/null && break; sleep 1; done
+          test "$(curl -fsS http://127.0.0.1:8080/api/v1/plugins | jq 'length')" -ge 0
+          # Install the published branch through the same host path used by users.
+          curl --fail -sS -X POST http://127.0.0.1:8080/api/v1/plugins/install/github-branch \
+            -H 'content-type: application/json' \
+            --data '{"repo":"MaxRink/decaid-e64ws-plugin","branch":"main"}'
+          expected='${{ github.sha }}'
+          actual=$(curl --fail -sS https://api.github.com/repos/MaxRink/decaid-e64ws-plugin/commits/main | jq -r .sha)
+          test "$actual" = "$expected"
+          curl --fail -sS -X POST http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/settings \
+            -H 'content-type: application/json' \
+            --data '{"InstancesJson":"[{\"id\":\"one\",\"name\":\"Mock One\",\"scheme\":\"ws\",\"host\":\"127.0.0.1\",\"port\":9997,\"pollMs\":0},{\"id\":\"two\",\"name\":\"Mock Two\",\"scheme\":\"ws\",\"host\":\"127.0.0.1\",\"port\":9998,\"pollMs\":0}]","TokensJson":"{\"one\":\"token-one\",\"two\":\"token-two\"}"}'
+          curl --fail -sS -X POST http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/enable
+          devices=$(curl --fail -sS http://127.0.0.1:8080/api/v1/devices)
+          id=$(printf '%s' "$devices" | jq -r '.[] | select(.id | contains("plugin:mahlkoenig-e64.reaplugin:e64:one")) | .id' | head -1)
+          test -n "$id"
+          curl --fail -sS -X PUT http://127.0.0.1:8080/api/v1/devices/connect -H 'content-type: application/json' --data "{\"deviceId\":\"$id\"}"
+          curl --fail -sS "http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/e64-diagnostics?deviceId=$id&read=machineInfo" | jq -e '.serial == "MOCK-one"'
+          curl --fail -sS -X POST http://127.0.0.1:9997/control -H 'content-type: application/json' --data '{"action":"close"}'
+          sleep 2
+          curl --fail -sS -X PUT http://127.0.0.1:8080/api/v1/devices/connect -H 'content-type: application/json' --data "{\"deviceId\":\"$id\"}" >/dev/null
