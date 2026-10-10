@@ -58,6 +58,9 @@ test('diagnostics uses the host deviceId and validates read response shapes', as
   fixture.events[0]({type: 'data', dataType: 'text', data: JSON.stringify({type: 'RequestLogMessagesResult', refId: wrong.msgId, data: []})});
   assert.equal((await invalid).status, 503);
   assert.equal((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'one'}})).status, 404);
+  assert.equal((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'startMotor'}})).status, 400);
+  assert.equal((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'POST', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'}})).status, 405);
+  assert.equal(fixture.sent.length, 3, 'rejected diagnostics must not send device commands');
 });
 
 test('rejects unknown token ids before registration', async () => {

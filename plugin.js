@@ -144,7 +144,8 @@ function createPlugin(host) {
       const instance = Array.from(instances.values()).find((candidate) => candidate.deviceId === id);
       if (!instance) return {status: 404, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unknown instance"})};
       const read = request.query.read;
-      const operation = read === "config" || read === "machineInfo" || read === "logs" ? read : null;
+      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "logs") return {status: 400, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unsupported read"})};
+      const operation = read === undefined ? null : read;
       return (operation ? requestRead(instance, operation) : Promise.resolve(instance.observations)).then((data) => ({status: 200, headers: {"Content-Type": "application/json"}, body: JSON.stringify(data)}), () => ({status: 503, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "E64 unavailable"})}));
     }
   };

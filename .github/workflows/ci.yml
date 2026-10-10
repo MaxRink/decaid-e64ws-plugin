@@ -24,6 +24,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: node --check plugin.js
+      - run: bash -n scripts/run-dev-smoke.sh
       - run: npm run package
       - name: Verify installable archive root
         shell: bash
@@ -120,7 +121,7 @@ jobs:
           # The app runtime smoke is loopback-only; this patch exists only in the CI clone.
           python3 - <<'PY'
           from pathlib import Path
-          files = [Path('lib/src/services/webserver_service.dart'), Path('lib/src/services/webui_service.dart')]
+          files = [Path('lib/src/services/webserver_service.dart'), Path('lib/src/webui_support/webui_service.dart')]
           changed = 0
           for path in files:
               text = path.read_text()
@@ -165,26 +166,7 @@ jobs:
           xvfb-run -a "$APP" --no-account --bypass-onboarding --serial > "$RUNNER_TEMP/e64-app.log" 2>&1 & echo $! > "$RUNNER_TEMP/e64-app.pid"
           for i in $(seq 1 40); do curl -fsS http://127.0.0.1:8080/api/v1/plugins >/dev/null && break; sleep 1; done
           test "$(curl -fsS http://127.0.0.1:8080/api/v1/plugins | jq 'length')" -ge 0
-          # Install the published branch through the same host path used by users.
-          curl --fail -sS -X POST http://127.0.0.1:8080/api/v1/plugins/install/github-branch \
-            -H 'content-type: application/json' \
-            --data "{\"repo\":\"$PLUGIN_REPO\",\"branch\":\"$PLUGIN_REF\"}"
-          installed=$(curl --fail -sS http://127.0.0.1:8080/api/v1/plugins)
-          installed_sha=$(printf '%s' "$installed" | jq -r '.[] | select(.id == "mahlkoenig-e64.reaplugin") | .source.commit')
-          test "$installed_sha" = "$PLUGIN_SHA"
-          curl --fail -sS -X POST http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/settings \
-            -H 'content-type: application/json' \
-            --data '{"InstancesJson":"[{\"id\":\"one\",\"name\":\"Mock One\",\"scheme\":\"ws\",\"host\":\"127.0.0.1\",\"port\":9997,\"pollMs\":0},{\"id\":\"two\",\"name\":\"Mock Two\",\"scheme\":\"ws\",\"host\":\"127.0.0.1\",\"port\":9998,\"pollMs\":0}]","TokensJson":"{\"one\":\"token-one\",\"two\":\"token-two\"}"}'
-          curl --fail -sS -X POST http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/enable
-          devices=$(curl --fail -sS http://127.0.0.1:8080/api/v1/devices)
-          id=$(printf '%s' "$devices" | jq -r '.[] | select(.id | contains("plugin:mahlkoenig-e64.reaplugin:e64:one")) | .id' | head -1)
-          test -n "$id"
-          curl --fail -sS -X PUT http://127.0.0.1:8080/api/v1/devices/connect -H 'content-type: application/json' --data "{\"deviceId\":\"$id\"}"
-          curl --fail -sS "http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/e64-diagnostics?deviceId=$id&read=machineInfo" | jq -e '.serial == "MOCK-one"'
-          curl --fail -sS -X POST http://127.0.0.1:9997/control -H 'content-type: application/json' --data '{"action":"close"}'
-          sleep 2
-          curl --fail -sS -X PUT http://127.0.0.1:8080/api/v1/devices/connect -H 'content-type: application/json' --data "{\"deviceId\":\"$id\"}" >/dev/null
-          PLUGIN_ROOT="$GITHUB_WORKSPACE" ../scripts/run-dev-smoke.sh
+          ../scripts/run-dev-smoke.sh
       - name: Upload runtime logs
         if: always()
         uses: actions/upload-artifact@v4

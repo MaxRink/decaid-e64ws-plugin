@@ -6,7 +6,7 @@ Read-only external `type: grinder` plugin for E64 devices exposing the local
 WebSocket protocol. It is based on the closed Decaid #848 implementation and
 uses the current runtime-v2 Grinder contract.
 
-The plugin registers one host-selected Grinder per configured instance. It
+The plugin registers an independent Grinder device for each configured instance. It
 publishes only the generic Grinder state (`idle`, `grinding`, `error`, or
 `unknown`); vendor responses from `RequestDriverState`, `RequestDriverConfig`,
 `RequestNachineInfo`, and `RequestLogMessages` are available through the
@@ -16,8 +16,8 @@ settings. `pollMs` defaults to 1000 and may be set to 0 to disable polling.
 
 `ws` is intended for a trusted network or simulator. `wss` uses the platform
 trust store; the plugin deliberately has no self-signed certificate bypass.
-The automated tests use a fake host transport; there is no real loopback
-simulator in this package and no hardware validation claim. Multiple instances have independent sockets and protocol state,
+The test suite includes a fake host transport and a real loopback WebSocket
+fixture. No hardware validation is claimed. Multiple instances have independent sockets and protocol state,
 but Decaid currently selects one connected Grinder for workflows.
 
 ## Installation
@@ -78,4 +78,25 @@ The fixture is test infrastructure only, not a production E64 emulator. It
 does not weaken `wss` certificate validation in the plugin. The Linux CI job
 builds the pinned Decaid host, runs it under Xvfb with fresh XDG directories,
 installs this public branch through the normal host installer, connects a
-synthetic instance, reads machine information, and exercises close/reconnect.
+synthetic instances and exercises the versioned `scripts/run-dev-smoke.sh`
+scenario. It checks state publication, instance selection, diagnostics, unsupported
+controls, token redaction, authentication failures, timeouts, malformed messages,
+reconnects, settings reload and unload/re-enable. Runtime CI must pass at the
+exact installed source revision before these checks count as verified evidence.
+
+## Diagnostics and errors
+
+The diagnostics surface accepts `GET` with the host `deviceId`. With no `read`
+parameter it returns last-known observations, which may remain available after
+disconnection. Reconnecting starts a fresh observation set. `read=config`,
+`read=machineInfo` and `read=logs` require a connected instance and validate the
+reply before returning it. Unsupported reads return 400, unknown instances 404,
+unsupported methods 405, and disconnected, timed-out or invalid read replies 503.
+
+A failed initial connection surfaces through Decaid's native device connection
+error and the REST `grinderConnectFailed` result. A malformed notification or
+polling failure disconnects that instance; stale socket events cannot update a
+replacement session. Configuration errors identify the invalid field without
+including the token. Secure settings are returned by the host as `isSet` state,
+not plaintext. Trust failures remain governed by the host's platform validation;
+custom TOFU/pinning/reset support is a separate host proposal.
