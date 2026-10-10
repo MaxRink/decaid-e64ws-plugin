@@ -57,6 +57,14 @@ CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
 and GitHub source archive against Decaid `af4e99524ad7731dbdb7db4540cd272bc91da038`
 using Flutter 3.44.2.
 
+The host job also executes this repository's real source through QuickJS against
+two loopback WebSocket peers, verifies diagnostics through the host HTTP bridge,
+and runs the host's transport, permission and TLS rejection suites. The Linux
+app job checks the normal installer, device APIs, error surfacing and lifecycle.
+All of these checks run without hardware. `--no-account` app smoke uses volatile
+secure settings; it proves redaction and in-process reload, not secure-token
+persistence across an app restart.
+
 License: GPL-3.0-or-later; the complete text is in `LICENSE`. Protocol and
 test behavior is derived from decentespresso/decaid pull request #848, with
 the original Decaid attribution retained in `NOTICE`.
@@ -78,7 +86,7 @@ The fixture is test infrastructure only, not a production E64 emulator. It
 does not weaken `wss` certificate validation in the plugin. The Linux CI job
 builds the pinned Decaid host, runs it under Xvfb with fresh XDG directories,
 installs this public branch through the normal host installer, connects a
-synthetic instances and exercises the versioned `scripts/run-dev-smoke.sh`
+pair of synthetic instances and exercises the versioned `scripts/run-dev-smoke.sh`
 scenario. It checks state publication, instance selection, diagnostics, unsupported
 controls, token redaction, authentication failures, timeouts, malformed messages,
 reconnects, settings reload and unload/re-enable. Runtime CI must pass at the

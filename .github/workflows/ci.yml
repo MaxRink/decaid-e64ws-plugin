@@ -71,10 +71,12 @@ jobs:
           tar -xzf /tmp/e64-github.tar.gz -C /tmp/e64-github-package
           echo "E64_GITHUB_PACKAGE=/tmp/e64-github-package" >> "$GITHUB_ENV"
           cp ci/host_manifest_compat_test.dart decaid/test/e64_external_manifest_compat_test.dart
+          cp ci/host_runtime_test.dart decaid/test/plugins/e64_external_runtime_test.dart
       - name: Run pinned host parser and package resolver
         working-directory: decaid
         env:
           E64_PACKAGE: ${{ github.workspace }}
+          E64_PLUGIN_ROOT: ${{ github.workspace }}
           E64_LOCAL_PACKAGE: /tmp/e64-local-package
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -85,7 +87,7 @@ jobs:
           mkdir -p assets/bundled_skins
           printf '["stub-skin"]\n' > assets/bundled_skins/manifest.json
           : > assets/bundled_skins/stub-skin.zip
-          flutter test test/e64_external_manifest_compat_test.dart
+          flutter test test/e64_external_manifest_compat_test.dart test/plugins/e64_external_runtime_test.dart test/plugins/plugin_manager_transport_test.dart test/plugins/plugin_manager_transport_tls_test.dart test/plugins/plugin_manager_permissions_test.dart
 
   linux-runtime:
     name: Linux app and E64 mock smoke
