@@ -184,6 +184,7 @@ jobs:
           curl --fail -sS -X POST http://127.0.0.1:9997/control -H 'content-type: application/json' --data '{"action":"close"}'
           sleep 2
           curl --fail -sS -X PUT http://127.0.0.1:8080/api/v1/devices/connect -H 'content-type: application/json' --data "{\"deviceId\":\"$id\"}" >/dev/null
+          PLUGIN_ROOT="$GITHUB_WORKSPACE" ../scripts/run-dev-smoke.sh
       - name: Upload runtime logs
         if: always()
         uses: actions/upload-artifact@v4
