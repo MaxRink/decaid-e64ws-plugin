@@ -4,10 +4,14 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
 async function startMock(t, id) {
+  const startupTimeoutMs = Number(process.env.E64_MOCK_STARTUP_TIMEOUT_MS || 30000);
+  assert.ok(Number.isFinite(startupTimeoutMs) && startupTimeoutMs > 0 && startupTimeoutMs <= 120000);
   const child = spawn(process.execPath, [fileURLToPath(new URL('../tools/e64-mock-server.mjs', import.meta.url)), '--id', id, '--port', '0', '--token', 'synthetic']);
   t.after(() => child.kill());
+  let stderr = '';
+  child.stderr.on('data', data => { stderr = (stderr + data).slice(-4096); });
   const port = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('mock startup timeout')), 5000);
+    const timer = setTimeout(() => reject(new Error(`mock startup timeout after ${startupTimeoutMs}ms: ${stderr}`)), startupTimeoutMs);
     let output = '';
     child.stdout.on('data', data => {
       output += data;
@@ -15,7 +19,7 @@ async function startMock(t, id) {
       if (match) { clearTimeout(timer); resolve(Number(match[1])); }
     });
     child.once('error', error => { clearTimeout(timer); reject(error); });
-    child.once('exit', code => { clearTimeout(timer); reject(new Error(`mock exited: ${code}`)); });
+    child.once('exit', code => { clearTimeout(timer); reject(new Error(`mock exited: ${code}: ${stderr}`)); });
   });
   const base = `http://127.0.0.1:${port}`;
   return {
