@@ -173,6 +173,9 @@ void main() {
       });
       expect(known['status'], 200);
       expect(known['body'] as String, contains('state'));
+      final knownHeaders = (known['headers'] as Map).cast<String, dynamic>();
+      expect(knownHeaders['X-E64-Observation-State'], 'last-known');
+      expect(knownHeaders['X-E64-Observation-Time'], isNotEmpty);
 
       final read = await request({
         'endpoint': 'e64-diagnostics',
@@ -181,6 +184,9 @@ void main() {
       });
       expect(read['status'], 200);
       expect(read['body'] as String, contains('E64'));
+      final readHeaders = (read['headers'] as Map).cast<String, dynamic>();
+      expect(readHeaders['X-E64-Observation-State'], 'live');
+      expect(readHeaders['X-E64-Observation-Time'], isNotEmpty);
 
       final badRead = await request({
         'endpoint': 'e64-diagnostics',
@@ -218,6 +224,13 @@ void main() {
         'query': {'deviceId': devices.first.deviceId, 'read': 'config'},
       });
       expect(unavailable['status'], 503);
+      final unavailableHeaders =
+          (unavailable['headers'] as Map).cast<String, dynamic>();
+      expect(unavailableHeaders['X-E64-Observation-State'], 'last-known');
+      expect(
+        unavailableHeaders['X-E64-Observation-Time'],
+        readHeaders['X-E64-Observation-Time'],
+      );
       await manager.unloadPlugin(manifest.id);
       expect(await service.devices.first, isEmpty);
     },
