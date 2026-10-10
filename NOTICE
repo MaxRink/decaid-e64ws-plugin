@@ -1,0 +1,6 @@
+This plugin preserves and ports protocol/session handling from
+decentespresso/decaid pull request #848, “E64 Sensor”.
+
+Copyright (C) Decaid contributors.
+The upstream project is licensed under the GNU General Public License,
+version 3 or later. This derivative is distributed under GPL-3.0-or-later.

@@ -1,0 +1,35 @@
+{
+  "id": "mahlkoenig-e64.reaplugin",
+  "name": "Mahlkönig E64",
+  "author": "Decaid contributors",
+  "description": "Read-only Mahlkönig E64 grinder telemetry over WebSocket.",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "permissions": ["log", "api", "network.websocket"],
+  "drivers": [{
+    "id": "e64",
+    "type": "grinder",
+    "surfaces": [{
+      "id": "diagnostics",
+      "role": "diagnostics",
+      "endpoint": "e64-diagnostics",
+      "label": "E64 diagnostics"
+    }]
+  }],
+  "settings": {
+    "InstancesJson": {
+      "type": "string",
+      "label": "E64 instances",
+      "description": "JSON array of id, name, scheme, host, port, and optional pollMs.",
+      "default": "[]"
+    },
+    "TokensJson": {
+      "type": "string",
+      "label": "E64 session tokens",
+      "description": "JSON object mapping instance ids to WebSocket tokens.",
+      "secure": true,
+      "default": "{}"
+    }
+  },
+  "api": [{"id": "e64-diagnostics", "type": "http", "data": {}}]
+}

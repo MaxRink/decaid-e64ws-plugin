@@ -1,0 +1,10 @@
+{
+  "name": "mahlkoenig-e64-reaplugin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/plugin.test.mjs",
+    "package": "npm test && zip -qr -FS mahlkoenig-e64-0.1.0.zip mahlkoenig-e64.reaplugin README.md NOTICE LICENSE LICENSE.txt"
+  },
+  "license": "GPL-3.0-or-later"
+}
