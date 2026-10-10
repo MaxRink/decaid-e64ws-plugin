@@ -87,6 +87,9 @@ jobs:
           mkdir -p assets/bundled_skins
           printf '["stub-skin"]\n' > assets/bundled_skins/manifest.json
           : > assets/bundled_skins/stub-skin.zip
+          QUICKJS_LIB_DIR=$(find "${PUB_CACHE:-$HOME/.pub-cache}/git" -path '*dart_js*/linux/shared' -type d -print -quit)
+          test -n "$QUICKJS_LIB_DIR"
+          export LD_LIBRARY_PATH="$QUICKJS_LIB_DIR:${LD_LIBRARY_PATH:-}"
           flutter test test/e64_external_manifest_compat_test.dart test/plugins/e64_external_runtime_test.dart test/plugins/plugin_manager_transport_test.dart test/plugins/plugin_manager_transport_tls_test.dart test/plugins/plugin_manager_permissions_test.dart
           flutter test test/plugin_loader_service_appstore_test.dart --plain-name secure
           flutter test test/services/account/encrypted_credential_store_test.dart
@@ -146,7 +149,8 @@ jobs:
           XDG_CACHE_HOME: ${{ runner.temp }}/e64-xdg/cache
           XDG_STATE_HOME: ${{ runner.temp }}/e64-xdg/state
           PLUGIN_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
-          PLUGIN_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          # The ordinary installer resolves commit refs as well as branch names.
+          PLUGIN_REF: ${{ github.event.pull_request.head.sha || github.sha }}
           PLUGIN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
