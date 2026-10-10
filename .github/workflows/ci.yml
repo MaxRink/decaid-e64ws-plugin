@@ -118,7 +118,19 @@ jobs:
           printf '["stub-skin"]\n' > assets/bundled_skins/manifest.json
           : > assets/bundled_skins/stub-skin.zip
           # The app runtime smoke is loopback-only; this patch exists only in the CI clone.
-          sed -i 's/InternetAddress.anyIPv4/InternetAddress.loopbackIPv4/g' lib/src/services/webserver_service.dart
+          python3 - <<'PY'
+          from pathlib import Path
+          files = [Path('lib/src/services/webserver_service.dart'), Path('lib/src/services/webui_service.dart')]
+          changed = 0
+          for path in files:
+              text = path.read_text()
+              count = text.count("'0.0.0.0'")
+              if count == 0:
+                  raise SystemExit(f'expected loopback patch target in {path}')
+              path.write_text(text.replace("'0.0.0.0'", "'127.0.0.1'"))
+              changed += count
+          print(f'patched {changed} listener addresses to loopback')
+          PY
           flutter pub get
           flutter build linux --debug --dart-define=simulate=machine,scale --no-pub
       - name: Run isolated app against two public-contract mock grinders
