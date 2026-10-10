@@ -1,5 +1,7 @@
 # Mahlkönig E64 Decaid plugin
 
+[![CI](https://github.com/MaxRink/decaid-e64ws-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/MaxRink/decaid-e64ws-plugin/actions/workflows/ci.yml)
+
 Read-only external `type: grinder` plugin for E64 devices exposing the local
 WebSocket protocol. It is based on the closed Decaid #848 implementation and
 uses the current runtime-v2 Grinder contract.
@@ -50,6 +52,10 @@ release paths are the supported update-aware choices.
 
 The repository and release ZIP keep `manifest.json` and `plugin.js` at their
 package root, as required by Decaid's plugin package resolver.
+
+CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
+and GitHub source archive against Decaid `af4e99524ad7731dbdb7db4540cd272bc91da038`
+using Flutter 3.44.2.
 
 License: GPL-3.0-or-later; the complete text is in `LICENSE`. Protocol and
 test behavior is derived from decentespresso/decaid pull request #848, with
