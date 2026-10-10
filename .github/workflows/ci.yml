@@ -17,8 +17,8 @@ jobs:
       matrix:
         node: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: ${{ matrix.node }}
       - run: npm ci
@@ -42,8 +42,8 @@ jobs:
     name: Decaid host compatibility
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+      - uses: actions/checkout@v5
         with:
           repository: decentespresso/decaid
           ref: af4e99524ad7731dbdb7db4540cd272bc91da038
@@ -52,19 +52,23 @@ jobs:
         with:
           channel: stable
           flutter-version: 3.44.2
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
       - name: Stage package for the pinned host resolver
         env:
           PLUGIN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           PLUGIN_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
         run: |
           mkdir -p /tmp/e64-local-package /tmp/e64-github-package
-          zip -q /tmp/mahlkoenig-e64-0.1.0.zip manifest.json plugin.js README.md NOTICE LICENSE
-          unzip -q /tmp/mahlkoenig-e64-0.1.0.zip -d /tmp/e64-local-package
+          npm ci
+          npm run package
+          unzip -q mahlkoenig-e64-0.1.0.zip -d /tmp/e64-local-package
           curl --fail --location --retry 3 \
             "https://github.com/${PLUGIN_REPO}/archive/${PLUGIN_SHA}.tar.gz" \
             --output /tmp/e64-github.tar.gz
           tar -xzf /tmp/e64-github.tar.gz -C /tmp/e64-github-package
-          echo "E64_GITHUB_PACKAGE=$(find /tmp/e64-github-package -mindepth 1 -maxdepth 1 -type d -print -quit)" >> "$GITHUB_ENV"
+          echo "E64_GITHUB_PACKAGE=/tmp/e64-github-package" >> "$GITHUB_ENV"
           cp ci/host_manifest_compat_test.dart decaid/test/e64_external_manifest_compat_test.dart
       - name: Run pinned host parser and package resolver
         working-directory: decaid
