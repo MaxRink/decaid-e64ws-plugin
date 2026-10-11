@@ -57,6 +57,19 @@ CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
 and GitHub source archive against Decaid `af4e99524ad7731dbdb7db4540cd272bc91da038`
 using Flutter 3.44.2.
 
+Browser contract checks use the repository mock fixture and Playwright Chromium;
+they do not require E64 hardware:
+
+```bash
+npm ci
+npx playwright install --with-deps chromium
+npm run test:browser
+```
+
+The browser suite covers state publication and transition, live diagnostics, and
+rejection of unsupported controls. CI runs it on Node 24 alongside the native
+Node matrix.
+
 The host job also executes this repository's real source through QuickJS against
 two loopback WebSocket peers, verifies diagnostics through the host HTTP bridge,
 and runs the host's transport, permission and TLS rejection suites. The Linux

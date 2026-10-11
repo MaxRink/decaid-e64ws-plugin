@@ -39,6 +39,26 @@ jobs:
           path: mahlkoenig-e64-0.1.0.zip
           if-no-files-found: error
 
+  playwright:
+    name: Playwright browser contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e64-playwright-results
+          path: test-results
+          if-no-files-found: ignore
+
   host-compat:
     name: Decaid host compatibility
     runs-on: ubuntu-latest
