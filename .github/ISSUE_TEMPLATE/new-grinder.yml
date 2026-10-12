@@ -1,0 +1,53 @@
+name: Add or improve a grinder
+description: Record a grinder model, variant, or calibration prior.
+title: "[Grinder] "
+labels: ["grinder"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Unknown values are welcome. Mark them as unknown rather than guessing.
+        Do not include passwords, tokens, private URLs, or personal data.
+  - type: input
+    id: model
+    attributes:
+      label: Manufacturer and model
+      placeholder: "Example: DF64 Gen 1"
+    validations:
+      required: true
+  - type: input
+    id: variant
+    attributes:
+      label: Variant, generation, or burrs
+      placeholder: "Example: Gen 1, SSP HU burrs"
+  - type: input
+    id: nativeunits
+    attributes:
+      label: Native dial units and range
+      placeholder: "Example: 0–90 dial marks; unknown is fine"
+  - type: input
+    id: finerdirection
+    attributes:
+      label: Finer/coarser direction
+      placeholder: "Clockwise finer, counter-clockwise finer, or unknown"
+  - type: input
+    id: step
+    attributes:
+      label: Smallest repeatable step
+      placeholder: "Value and unit, or unknown"
+  - type: textarea
+    id: calibration
+    attributes:
+      label: Calibration and offset
+      description: Include owner-measured zero/anchor information only when you can explain how it was measured.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence URLs and photos
+      description: Link public manuals, manufacturer drawings, measurements, or photos. State photo rights/license or that you own the photo.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes and uncertainty
+      description: Separate observed facts, owner measurements, and rough assumptions.
+

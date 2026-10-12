@@ -1,0 +1,27 @@
+name: Feature or upstream integration proposal
+description: Propose a user-facing feature, API integration, or upstream change.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem and proposed outcome
+    validations:
+      required: true
+  - type: textarea
+    id: upstream
+    attributes:
+      label: Upstream or Streamline relationship
+      description: Link the relevant Decaid/Streamline API, discussion, issue, or design proposal when applicable.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Proposed behavior and alternatives
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Acceptance and test plan
+

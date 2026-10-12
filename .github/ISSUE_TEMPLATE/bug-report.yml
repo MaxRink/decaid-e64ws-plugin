@@ -1,0 +1,46 @@
+name: Bug report
+description: Report a reproducible problem in the plugin, website, collector, or dashboard.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Affected area
+      options:
+        - Plugin
+        - Simulator or website
+        - Collector
+        - Dashboard
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Include plugin version, host version, or commit when known.
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Safe diagnostic evidence
+      description: Paste redacted errors, request IDs, screenshots, or mock traces. Never include secrets, tokens, credentials, or private customer data.
+
