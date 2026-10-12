@@ -7,11 +7,11 @@ body:
     id: scope
     attributes:
       label: Affected area
+      description: E64 protocol, grinder behavior, and mock-device scope.
       options:
-        - Plugin
-        - Simulator or website
-        - Collector
-        - Dashboard
+        - E64 WS plugin
+        - Grinder mock device
+        - Host compatibility
         - Other
     validations:
       required: true
