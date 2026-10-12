@@ -1,0 +1,12 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Decaid and Streamline integration discussions
+    url: https://github.com/decentespresso/decaid/discussions
+    about: Discuss upstream APIs, host integration, and proposals before filing an implementation issue.
+  - name: Decaid host documentation
+    url: https://github.com/decentespresso/decaid
+    about: Check host contracts and supported device behavior first.
+  - name: Streamline documentation
+    url: https://github.com/decentespresso/streamline-js
+    about: Check Streamline UI and integration guidance.
+

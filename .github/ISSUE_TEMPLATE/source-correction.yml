@@ -1,0 +1,32 @@
+name: Source or algorithm correction
+description: Correct a research source, grinder prior, algorithm assumption, or provenance entry.
+title: "[Source] "
+labels: ["research"]
+body:
+  - type: input
+    id: source
+    attributes:
+      label: Source URL or catalog path
+    validations:
+      required: true
+  - type: dropdown
+    id: correctiontype
+    attributes:
+      label: Correction type
+      options: [Source metadata, Grinder mechanics, Algorithm assumption, Photo/license, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current statement or value
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed correction and evidence
+    validations:
+      required: true
+  - type: textarea
+    id: uncertainty
+    attributes:
+      label: Uncertainty and reproducibility notes

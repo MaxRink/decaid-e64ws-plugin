@@ -1,0 +1,37 @@
+name: Protocol or mock-device report
+description: Report a device protocol detail, emulator gap, or hardware-independent test case.
+title: "[Protocol/mock] "
+labels: ["protocol", "testing"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Report type
+      options:
+        - Protocol observation
+        - Mock-device behavior
+        - Hardware-independent test request
+        - Host compatibility issue
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device, model, or emulator
+  - type: textarea
+    id: exchange
+    attributes:
+      label: Redacted request/response or trace
+      description: Include units, ordering, timing, and error codes. Remove credentials and personal data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected contract or test outcome
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction without real hardware
+      description: Describe the mock fixture or deterministic replay that should reproduce it.
+

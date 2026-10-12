@@ -1,0 +1,41 @@
+name: Coffee catalog correction
+description: Correct a coffee, bean, roast, or catalog source record.
+title: "[Catalog] "
+labels: ["catalog"]
+body:
+  - type: input
+    id: catalogentry
+    attributes:
+      label: Catalog entry or source URL
+    validations:
+      required: true
+  - type: dropdown
+    id: correctiontype
+    attributes:
+      label: Correction type
+      options:
+        - Name or roaster
+        - Bean type or species
+        - Roast level
+        - Origin or processing
+        - Source or license
+        - Duplicate
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: current
+    attributes:
+      label: Current value
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed value and evidence
+    validations:
+      required: true
+  - type: textarea
+    id: rights
+    attributes:
+      label: Source and reuse rights
+      description: Explain the public source and any attribution or license requirement.
+
