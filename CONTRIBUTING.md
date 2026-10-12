@@ -21,7 +21,7 @@ Keep pull requests focused. Include the affected host/plugin version, tests run,
 | Recovered E64 firmware implementation | [Research issues](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/issues/new/choose) |
 | Host beans, shot capture or device APIs | [Decaid issues](https://github.com/decentespresso/decaid/issues) and [discussions](https://github.com/decentespresso/decaid/discussions) |
 | Streamline navigation or skin integration | [Streamline issues](https://github.com/decentespresso/streamline-js/issues) |
-| A security vulnerability | [Private report](https://github.com/MaxRink/decaid-e64ws-plugin/security/advisories/new) |
+| A security vulnerability | [Private report](https://github.com/MaxRink/decaid-assisted-dialin-plugin/security/advisories/new) |
 
 The plugin and [website](https://maxrink.github.io/decaid-assisted-dialin-plugin/simulator/) link to these forms through Help. Opening a form does not submit a report or attach your saved coffee/grinder data. GitHub issues are public; review what you attach.
 

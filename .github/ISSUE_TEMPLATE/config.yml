@@ -9,12 +9,15 @@ contact_links:
 - name: Streamline documentation
   url: https://github.com/decentespresso/streamline-js
   about: Check Streamline UI and integration guidance.
+- name: Skale device and Bluetooth reports
+  url: https://github.com/MaxRink/decaid-skale-plugin/issues/new/choose
+  about: Report Skale connection, protocol and fake-GATT reproduction problems.
+- name: E64 WS device and grinder mock reports
+  url: https://github.com/MaxRink/decaid-e64ws-plugin/issues/new/choose
+  about: Report grinder connection, protocol, dose and mock-device problems.
 - name: Recovered Mahlkonig firmware research
   url: https://github.com/MaxRink/mahlkoenig-e64ws-local-research/issues/new/choose
   about: Correct recovered firmware behavior and research evidence.
-- name: Assisted dial-in website and catalog
-  url: https://github.com/MaxRink/decaid-assisted-dialin-plugin/issues/new/choose
-  about: Route grinder catalog, website, and assisted dial-in proposals.
 - name: Private security report
-  url: https://github.com/MaxRink/decaid-e64ws-plugin/security/advisories/new
+  url: https://github.com/MaxRink/decaid-assisted-dialin-plugin/security/advisories/new
   about: Keep vulnerability details out of public bug reports.
