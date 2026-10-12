@@ -132,3 +132,17 @@ replacement session. Configuration errors identify the invalid field without
 including the token. Secure settings are returned by the host as `isSet` state,
 not plaintext. Trust failures remain governed by the host's platform validation;
 custom TOFU/pinning/reset support is a separate host proposal.
+
+## Releases
+
+Install the latest [GitHub release](https://github.com/MaxRink/decaid-e64ws-plugin/releases)
+through Decaid’s plugin installer. Each release has exactly one flat ZIP with the
+manifest, runtime plugin and licence notices. The tag must match the manifest
+version. Subsequent releases require a version bump in the manifest, package and
+lockfile.
+
+The tag-triggered release workflow reruns the complete repository CI and publishes
+the tested archive only after all jobs pass. `npm run package` produces a
+deterministic archive under `dist/`; documentation, mocks and CI fixtures remain
+in the repository. CI proves synthetic software behavior, not physical hardware
+or firmware compatibility.

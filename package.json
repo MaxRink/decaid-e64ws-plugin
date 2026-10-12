@@ -6,10 +6,11 @@
     "test": "node --test test/plugin.test.mjs test/mock-server.test.mjs",
     "test:browser": "playwright test test/playwright.test.mjs",
     "mock": "node tools/e64-mock-server.mjs",
-    "package": "zip -qr -FS mahlkoenig-e64-0.1.0.zip manifest.json plugin.js README.md NOTICE LICENSE"
+    "package": "python3 scripts/package-plugin.py"
   },
   "license": "GPL-3.0-or-later",
   "devDependencies": {
     "@playwright/test": "1.64.0"
-  }
+  },
+  "version": "0.1.0"
 }

@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*', '[0-9]*']
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 scripts/package-plugin.py --tag "$GITHUB_REF_NAME"
+
+  checks:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: checks
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: decaid-e64ws-plugin-${{ github.sha }}
+          path: dist
+      - name: Verify and publish the tested archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, zipfile
+          version = json.loads(pathlib.Path('manifest.json').read_text())['version']
+          assert os.environ['GITHUB_REF_NAME'].removeprefix('v') == version
+          archives = list(pathlib.Path('dist').glob('*.zip'))
+          assert len(archives) == 1, 'exactly one plugin ZIP is required'
+          with zipfile.ZipFile(archives[0]) as package:
+              assert set(package.namelist()) == {'manifest.json', 'plugin.js', 'README.md', 'NOTICE', 'LICENSE'}
+              assert package.testzip() is None
+              assert json.loads(package.read('manifest.json'))['version'] == version
+              for name in package.namelist():
+                  assert package.read(name) == pathlib.Path(name).read_bytes(), name
+          digest = hashlib.sha256(archives[0].read_bytes()).hexdigest()
+          pathlib.Path('release-notes.md').write_text(
+              f'Install the single ZIP below through Decaid’s plugin installer, or use this repository URL.\n\n'
+              f'The tag matches manifest version {version}. Complete CI passed, including protocol/mock browser contracts, '
+              f'the pinned Decaid host package/runtime contract.\n\n'
+              f'Physical hardware and firmware compatibility remain unvalidated; '
+              f'CI uses synthetic devices and cannot establish physical-device support.\n\n'
+              f'SHA-256 ({archives[0].name}): `{digest}`\n'
+          )
+          PY
+          gh release create "$GITHUB_REF_NAME" dist/*.zip --verify-tag \
+            --title "E64 WS $GITHUB_REF_NAME" --notes-file release-notes.md
