@@ -12,10 +12,13 @@ FILES = ("manifest.json", "plugin.js", "README.md", "NOTICE", "LICENSE")
 
 def build(root, tag=None):
     version = json.loads((root / "manifest.json").read_text())["version"]
-    if not re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", version):
+    if not re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", version):
         raise ValueError("manifest version must be a stable semantic version")
     if json.loads((root / "package.json").read_text())["version"] != version:
         raise ValueError("package and manifest versions must match")
+    lock = json.loads((root / "package-lock.json").read_text())
+    if lock.get("version") != version or lock.get("packages", {}).get("", {}).get("version") != version:
+        raise ValueError("lockfile and manifest versions must match")
     if tag is not None and tag.removeprefix("v") != version:
         raise ValueError("release tag must match the manifest version")
     contents = {name: (root / name).read_bytes() for name in FILES}
