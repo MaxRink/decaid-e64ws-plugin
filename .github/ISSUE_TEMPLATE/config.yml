@@ -1,12 +1,23 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Decaid and Streamline integration discussions
-    url: https://github.com/decentespresso/decaid/discussions
-    about: Discuss upstream APIs, host integration, and proposals before filing an implementation issue.
-  - name: Decaid host documentation
-    url: https://github.com/decentespresso/decaid
-    about: Check host contracts and supported device behavior first.
-  - name: Streamline documentation
-    url: https://github.com/decentespresso/streamline-js
-    about: Check Streamline UI and integration guidance.
-
+- name: Decaid and Streamline integration discussions
+  url: https://github.com/decentespresso/decaid/discussions
+  about: Discuss upstream APIs, host integration, and proposals before filing an implementation issue.
+- name: Decaid host documentation
+  url: https://github.com/decentespresso/decaid
+  about: Check host contracts and supported device behavior first.
+- name: Streamline documentation
+  url: https://github.com/decentespresso/streamline-js
+  about: Check Streamline UI and integration guidance.
+- name: Skale device and Bluetooth reports
+  url: https://github.com/MaxRink/decaid-skale-plugin/issues/new/choose
+  about: Report Skale connection, protocol and fake-GATT reproduction problems.
+- name: E64 WS device and grinder mock reports
+  url: https://github.com/MaxRink/decaid-e64ws-plugin/issues/new/choose
+  about: Report grinder connection, protocol, dose and mock-device problems.
+- name: Recovered Mahlkonig firmware research
+  url: https://github.com/MaxRink/mahlkoenig-e64ws-local-research/issues/new/choose
+  about: Correct recovered firmware behavior and research evidence.
+- name: Private security report
+  url: https://github.com/MaxRink/decaid-assisted-dialin-plugin/security/advisories/new
+  about: Keep vulnerability details out of public bug reports.
