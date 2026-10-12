@@ -27,23 +27,22 @@ and validated device surfaces (the current `main` line, after the work tracked
 by Decaid #889/#896 and #949/#962). The stable `0.8.8` release has not been
 validated with this plugin and should not be treated as compatible.
 
-The current repository has no release asset. For a tracked installation, use
-Decaid's GitHub-branch installer against the public `main` branch:
-
-```bash
-curl -X POST http://decaid-host:8080/api/v1/plugins/install/github-branch \
-  -H 'content-type: application/json' \
-  -d '{"repo":"MaxRink/decaid-e64ws-plugin","branch":"main"}'
-```
-
-When a tagged release later publishes exactly one `.zip` asset, the release
-installer can be used instead. The tag must match the manifest version after
-removing an optional `v` prefix, for example `v0.1.0` for version `0.1.0`:
+Use Decaid's GitHub-release installer for stable installations. Each release
+contains one installable ZIP, and its tag matches the manifest version:
 
 ```bash
 curl -X POST http://decaid-host:8080/api/v1/plugins/install/github-release \
   -H 'content-type: application/json' \
   -d '{"repo":"MaxRink/decaid-e64ws-plugin"}'
+```
+
+For development builds, the GitHub-branch installer tracks the public `main`
+branch:
+
+```bash
+curl -X POST http://decaid-host:8080/api/v1/plugins/install/github-branch \
+  -H 'content-type: application/json' \
+  -d '{"repo":"MaxRink/decaid-e64ws-plugin","branch":"main"}'
 ```
 
 The Decaid Plugins screen can also install the ZIP or folder as a local

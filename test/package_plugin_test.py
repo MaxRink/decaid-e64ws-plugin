@@ -21,6 +21,7 @@ class PackageTests(unittest.TestCase):
             (self.root / name).write_text("runtime " + name)
         for name in ("manifest.json", "package.json"):
             (self.root / name).write_text(json.dumps({"version": "0.3.0"}))
+        (self.root / "package-lock.json").write_text(json.dumps({"version": "0.3.0", "packages": {"": {"version": "0.3.0"}}}))
         (self.root / "docs").mkdir()
         (self.root / "docs/plot.svg").write_text("not runtime")
 
@@ -44,7 +45,7 @@ class PackageTests(unittest.TestCase):
             packager.build(self.root)
 
     def test_prerelease_and_leading_zero_versions_are_rejected(self):
-        for version in ("0.4.0-rc.1", "00.4.0"):
+        for version in ("0.4.0-rc.1", "00.4.0", "1٣.2.3"):
             with self.subTest(version=version):
                 (self.root / "manifest.json").write_text(json.dumps({"version": version}))
                 with self.assertRaisesRegex(ValueError, "stable semantic version"):
@@ -56,10 +57,23 @@ class PackageTests(unittest.TestCase):
         unrelated.write_bytes(b"keep")
         for name in ("manifest.json", "package.json"):
             (self.root / name).write_text(json.dumps({"version": "0.4.0"}))
+        (self.root / "package-lock.json").write_text(json.dumps({"version": "0.4.0", "packages": {"": {"version": "0.4.0"}}}))
         current = packager.build(self.root)
         self.assertFalse(previous.exists())
         self.assertTrue(current.exists())
         self.assertEqual(unrelated.read_bytes(), b"keep")
+
+    def test_each_lockfile_version_must_match(self):
+        for key in ("top", "root"):
+            with self.subTest(key=key):
+                lock = {"version": "0.3.0", "packages": {"": {"version": "0.3.0"}}}
+                if key == "top":
+                    lock["version"] = "0.2.0"
+                else:
+                    lock["packages"][""]["version"] = "0.2.0"
+                (self.root / "package-lock.json").write_text(json.dumps(lock))
+                with self.assertRaisesRegex(ValueError, "lockfile and manifest"):
+                    packager.build(self.root)
 
     def test_missing_runtime_file_does_not_leave_an_archive(self):
         (self.root / "plugin.js").unlink()
