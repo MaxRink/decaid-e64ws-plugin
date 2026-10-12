@@ -9,9 +9,9 @@ contact_links:
 - name: Streamline documentation
   url: https://github.com/decentespresso/streamline-js
   about: Check Streamline UI and integration guidance.
-- name: Recovered Mahlkonig firmware research
-  url: https://github.com/MaxRink/mahlkoenig-e64ws-local-research/issues/new/choose
-  about: Correct recovered firmware behavior and research evidence.
+- name: Research and source corrections
+  url: https://github.com/MaxRink/decaid-assisted-dialin-plugin/issues/new/choose
+  about: Route research evidence and algorithm corrections through the public assisted-dial-in intake.
 - name: Assisted dial-in website and catalog
   url: https://github.com/MaxRink/decaid-assisted-dialin-plugin/issues/new/choose
   about: Route grinder catalog, website, and assisted dial-in proposals.
