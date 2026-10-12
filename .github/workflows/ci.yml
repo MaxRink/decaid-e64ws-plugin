@@ -4,6 +4,7 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -26,17 +27,12 @@ jobs:
       - run: node --check plugin.js
       - run: bash -n scripts/run-dev-smoke.sh
       - run: npm run package
-      - name: Verify installable archive root
-        shell: bash
-        run: |
-          test "$(unzip -Z1 mahlkoenig-e64-0.1.0.zip | grep -c '^manifest.json$')" = 1
-          test "$(unzip -Z1 mahlkoenig-e64-0.1.0.zip | grep -c '^plugin.js$')" = 1
-          test "$(unzip -Z1 mahlkoenig-e64-0.1.0.zip | grep -c '^mahlkoenig-e64.reaplugin/')" = 0
+      - run: python3 -m unittest discover -s test -p package_plugin_test.py
       - uses: actions/upload-artifact@v4
-        if: matrix.node == 22
+        if: matrix.node == 24
         with:
-          name: mahlkoenig-e64-0.1.0
-          path: mahlkoenig-e64-0.1.0.zip
+          name: decaid-e64ws-plugin-${{ github.sha }}
+          path: dist/*.zip
           if-no-files-found: error
 
   playwright:
@@ -86,7 +82,7 @@ jobs:
           mkdir -p /tmp/e64-local-package /tmp/e64-github-package
           npm ci
           npm run package
-          unzip -q mahlkoenig-e64-0.1.0.zip -d /tmp/e64-local-package
+          unzip -q dist/*.zip -d /tmp/e64-local-package
           curl --fail --location --retry 3 \
             "https://github.com/${PLUGIN_REPO}/archive/${PLUGIN_SHA}.tar.gz" \
             --output /tmp/e64-github.tar.gz
