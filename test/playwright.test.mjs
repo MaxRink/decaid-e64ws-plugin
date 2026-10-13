@@ -67,9 +67,9 @@ test.afterAll(async () => {
 });
 
 test('publishes idle and transitions to grinding through the E64 HTTP contract', async ({request}) => {
-  expect(await (await request.get(`${baseUrl}/diagnostics?deviceId=${encodeURIComponent(registration.device.deviceId)}`)).json()).toMatchObject({state: {state: 'idle'}});
+  expect(await (await request.get(`${baseUrl}/diagnostics?deviceId=${encodeURIComponent(registration.device.deviceId)}`)).json()).toMatchObject({state: {grindState: 'idle', ddValueDum: 501}});
   await request.post(`${baseUrl}/control`, {data: {state: 'grinding'}});
-  await expect.poll(() => request.get(`${baseUrl}/diagnostics?deviceId=${encodeURIComponent(registration.device.deviceId)}`).then(response => response.json())).toMatchObject({state: {state: 'grinding'}});
+  await expect.poll(() => request.get(`${baseUrl}/diagnostics?deviceId=${encodeURIComponent(registration.device.deviceId)}`).then(response => response.json())).toMatchObject({state: {grindState: 'grinding'}});
 });
 
 test('serves live diagnostics and rejects unsupported controls through HTTP', async ({request}) => {

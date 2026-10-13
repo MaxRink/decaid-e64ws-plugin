@@ -65,6 +65,7 @@ void main() {
           if (token != null) seenTokens.add(token);
           socket.listen((raw) {
             final message = jsonDecode(raw as String) as Map<String, dynamic>;
+            expect(message['data'], isEmpty);
             final type = message['type'];
             final serverIndex = servers.indexOf(server);
             if (serverIndex >= 0 && malformedNext[serverIndex]) {
@@ -73,7 +74,12 @@ void main() {
               return;
             }
             final result = switch (type) {
-              'RequestDriverState' => {'state': state},
+              'RequestDriverState' => {
+                'grindState': state,
+                'ddValueDum': serverIndex == 0 ? 501 : 602,
+                'ddSensorFailed': false,
+                'fan1TachoRpm': 800,
+              },
               'RequestDriverConfig' => {'model': 'E64'},
               'RequestNachineInfo' => {'firmware': 'mock-1'},
               'RequestLogMessages' => {'entries': <dynamic>[]},
@@ -155,6 +161,20 @@ void main() {
         containsAll([GrinderState.idle, GrinderState.grinding]),
       );
       expect(seenTokens, containsAll(['idle-token', 'grinding-token']));
+      expect(
+        snapshots.map((snapshot) => snapshot.observedSetting),
+        containsAll(['501 ddValueDum', '602 ddValueDum']),
+      );
+      for (final snapshot in snapshots) {
+        expect(snapshot.observedRpm, isNull);
+        expect(snapshot.toJson(), isNot(contains('rpm')));
+      }
+      for (final device in devices) {
+        expect(device.observations, {GrinderObservation.setting});
+        expect(device.capabilities, isEmpty);
+        await expectLater(device.setGrindSetting('500'), throwsA(anything));
+        await expectLater(device.setRpm(800), throwsA(anything));
+      }
 
       Future<Map<String, dynamic>> request(Map<String, dynamic> value) async {
         final id = 'request-${DateTime.now().microsecondsSinceEpoch}';
@@ -224,8 +244,8 @@ void main() {
         'query': {'deviceId': devices.first.deviceId, 'read': 'config'},
       });
       expect(unavailable['status'], 503);
-      final unavailableHeaders =
-          (unavailable['headers'] as Map).cast<String, dynamic>();
+      final unavailableHeaders = (unavailable['headers'] as Map)
+          .cast<String, dynamic>();
       expect(unavailableHeaders['X-E64-Observation-State'], 'last-known');
       expect(
         unavailableHeaders['X-E64-Observation-Time'],
@@ -236,4 +256,3 @@ void main() {
     },
   );
 }
-
