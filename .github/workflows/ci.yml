@@ -19,8 +19,8 @@ jobs:
       matrix:
         node: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
       - run: npm ci
@@ -29,7 +29,7 @@ jobs:
       - run: bash -n scripts/run-dev-smoke.sh
       - run: npm run package
       - run: python3 -m unittest discover -s test -p package_plugin_test.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: matrix.node == 24
         with:
           name: decaid-e64ws-plugin-${{ github.sha }}
@@ -40,8 +40,8 @@ jobs:
     name: HTTP API contract
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -49,7 +49,7 @@ jobs:
       - run: npm run test:http
       - name: Upload Playwright artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e64-playwright-results
           path: |
@@ -61,8 +61,8 @@ jobs:
     name: Decaid host compatibility
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: decentespresso/decaid
           ref: bafa9b3f2b90e65334e990b0b9601a9965cf979b
@@ -71,7 +71,7 @@ jobs:
         with:
           channel: stable
           flutter-version: 3.44.2
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Stage package for the pinned host resolver
@@ -117,8 +117,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           repository: decentespresso/decaid
           ref: bafa9b3f2b90e65334e990b0b9601a9965cf979b
@@ -127,7 +127,7 @@ jobs:
         with:
           channel: stable
           flutter-version: 3.44.2
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Install Linux runtime dependencies
@@ -199,7 +199,7 @@ jobs:
           fi
       - name: Upload runtime logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e64-linux-runtime-logs
           path: ${{ runner.temp }}/e64-*.log
