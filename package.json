@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/plugin.test.mjs test/mock-server.test.mjs",
-    "test:browser": "playwright test test/playwright.test.mjs",
+    "test:http": "playwright test test/playwright.test.mjs",
+    "test:browser": "npm run test:http --",
     "mock": "node tools/e64-mock-server.mjs",
     "package": "python3 scripts/package-plugin.py"
   },

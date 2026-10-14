@@ -36,8 +36,8 @@ jobs:
           path: dist/*.zip
           if-no-files-found: error
 
-  playwright:
-    name: Playwright browser contract
+  http-contract:
+    name: HTTP API contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -46,8 +46,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:browser
+      - run: npm run test:http
       - name: Upload Playwright artifacts
         if: always()
         uses: actions/upload-artifact@v4

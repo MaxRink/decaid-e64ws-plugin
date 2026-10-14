@@ -49,8 +49,8 @@ jobs:
           digest = hashlib.sha256(archives[0].read_bytes()).hexdigest()
           pathlib.Path('release-notes.md').write_text(
               f'Install the single ZIP below through Decaid’s plugin installer, or use this repository URL.\n\n'
-              f'The tag matches manifest version {version}. Complete CI passed, including protocol/mock browser contracts, '
-              f'the pinned Decaid host package/runtime contract.\n\n'
+              f'The tag matches manifest version {version}. Complete CI passed, including protocol/mock and HTTP API contracts, '
+              f'and the pinned Decaid host package/runtime contract.\n\n'
               f'Physical hardware and firmware compatibility remain unvalidated; '
               f'CI uses synthetic devices and cannot establish physical-device support.\n\n'
               f'SHA-256 ({archives[0].name}): `{digest}`\n'
