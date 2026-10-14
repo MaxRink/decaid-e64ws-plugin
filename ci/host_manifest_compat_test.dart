@@ -14,10 +14,13 @@ void main() {
       expect(path, isNotNull);
       final package = resolvePluginPackage(Directory(path!));
       expect(package.manifest.id, 'mahlkoenig-e64.reaplugin');
-      expect(package.manifest.version, '0.1.0');
+      expect(package.manifest.version, '0.2.0');
       final driver = package.manifest.drivers.single;
       expect(driver.type.name, 'grinder');
       expect(driver.grinderCapabilities, isEmpty);
+      expect(driver.grinderObservations.map((value) => value.name), [
+        'setting',
+      ]);
       expect(driver.surfaces.single.role, 'diagnostics');
       expect(driver.surfaces.single.endpoint, 'e64-diagnostics');
     });

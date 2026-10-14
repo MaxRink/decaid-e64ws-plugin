@@ -47,7 +47,8 @@ function createPlugin(host) {
     return config.scheme + "://" + hostName + ":" + config.port + "/?token=" + encodeURIComponent(config.token);
   }
   function stateOf(data) {
-    const value = data && (data.state || data.status || data.mode);
+    if (data && data.grindFailure === true) return "error";
+    const value = data && (Object.prototype.hasOwnProperty.call(data, "grindState") ? data.grindState : (data.state || data.status || data.mode));
     if (typeof value !== "string") return "unknown";
     const normalized = value.toLowerCase();
     if (["grinding", "running", "active"].includes(normalized)) return "grinding";
@@ -56,9 +57,9 @@ function createPlugin(host) {
     return "unknown";
   }
   function make(config) {
-    return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, connected: false, observations: {}, lastObservationAt: null};
+    return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, observationExpiry: null, connected: false, observations: {}, lastObservationAt: null};
   }
-  function clear(instance) { if (instance.poll !== null) clearTimeout(instance.poll); instance.poll = null; }
+  function clear(instance) { if (instance.poll !== null) clearTimeout(instance.poll); instance.poll = null; clearTimeout(instance.observationExpiry); instance.observationExpiry = null; }
   function rejectAll(instance, reason) { for (const item of instance.pending.values()) { clearTimeout(item.timer); item.reject(new Error(reason)); } instance.pending.clear(); }
   function schedule(instance, epoch) {
     if (!instance.connected || instance.config.pollMs === 0 || instance.epoch !== epoch) return;
@@ -81,7 +82,17 @@ function createPlugin(host) {
       if (!message.data || typeof message.data !== "object" || Array.isArray(message.data)) { item.reject(new Error("E64 invalid state response")); return; }
       instance.observations.state = message.data;
       instance.lastObservationAt = new Date().toISOString();
-      instance.context.publish({state: stateOf(message.data)}).then(item.resolve, item.reject);
+      clearTimeout(instance.observationExpiry); instance.observationExpiry = null;
+      const snapshot = {state: stateOf(message.data)};
+      if (message.data.ddSensorFailed === false && Number.isSafeInteger(message.data.ddValueDum) && message.data.ddValueDum >= 0) {
+        snapshot.observedSetting = String(message.data.ddValueDum) + " ddValueDum";
+        instance.observationExpiry = setTimeout(() => {
+          if (instance.epoch !== epoch || !instance.connected || instance.observations.state !== message.data) return;
+          instance.observationExpiry = null;
+          instance.context.publish({state: snapshot.state}).catch(() => failSession(instance, epoch, "E64 observation expired"));
+        }, TIMEOUT);
+      }
+      instance.context.publish(snapshot).then(item.resolve, item.reject);
     } else {
       if (!message.data || typeof message.data !== "object" || Array.isArray(message.data)) { item.reject(new Error("E64 invalid read response")); return; }
       instance.observations[item.name] = message.data; instance.lastObservationAt = new Date().toISOString(); item.resolve(message.data);
@@ -129,7 +140,7 @@ function createPlugin(host) {
     return new Promise((resolve, reject) => {
       const item = {epoch, type: command[1], name, publish, resolve, reject, timer: setTimeout(() => { if (instance.pending.delete(id)) reject(new Error("E64 request timed out")); }, TIMEOUT)};
       instance.pending.set(id, item);
-      instance.transport.send(instance.handle, {type: "text", data: JSON.stringify({type: command[0], msgId: id})}).catch(() => { if (instance.pending.delete(id)) { clearTimeout(item.timer); reject(new Error("E64 request failed")); } });
+      instance.transport.send(instance.handle, {type: "text", data: JSON.stringify({type: command[0], msgId: id, data: {}})}).catch(() => { if (instance.pending.delete(id)) { clearTimeout(item.timer); reject(new Error("E64 request failed")); } });
     });
   }
   const plugin = {

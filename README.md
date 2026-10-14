@@ -7,12 +7,32 @@ WebSocket protocol. It is based on the closed Decaid #848 implementation and
 uses the current runtime-v2 Grinder contract.
 
 The plugin registers an independent Grinder device for each configured instance. It
-publishes only the generic Grinder state (`idle`, `grinding`, `error`, or
-`unknown`); vendor responses from `RequestDriverState`, `RequestDriverConfig`,
+publishes the generic Grinder state (`idle`, `grinding`, `error`, or
+`unknown`) and a read-only setting observation; vendor responses from `RequestDriverState`, `RequestDriverConfig`,
 `RequestNachineInfo`, and `RequestLogMessages` are available through the
 diagnostics surface. There are no motor, grind-setting, RPM, calibration, or
 GBS writes. Configure `InstancesJson` and secure `TokensJson` in the plugin
 settings. `pollMs` defaults to 1000 and may be set to 0 to disable polling.
+
+The setting comes only from a `RequestDriverStateResult` containing a
+nonnegative safe-integer `ddValueDum` and an explicit `ddSensorFailed: false`.
+It is published as the opaque string `501 ddValueDum`, for example. This retains
+the device's raw coordinate without presenting it as a calibrated display value,
+particle size, recipe target or physical dose record. No conversion to micrometres
+is performed. Missing or invalid values clear the observation on the next state
+response. Each reading expires after five seconds, including with polling
+disabled; diagnostics retain their labelled last-known copy. A successful new
+state read refreshes that window independently for each instance. Configuration
+reads do not refresh it.
+
+Native `grindState` takes precedence over legacy `state`/`status`/`mode` aliases;
+unrecognized state values remain `unknown`, and `grindFailure: true` reports
+`error`. No grinder RPM observation is declared: cooling-fan tachometer values
+are not grinder motor RPM. The field mapping is based on static protocol evidence,
+not a physical capture. Comparing the raw setting with the actual firmware and
+display, establishing its calibration/units, and any future grinder-RPM mapping
+remain hardware-validation work tracked in issue #9. No private research source,
+firmware code, device capture or credentials are included in this package.
 
 `ws` is intended for a trusted network or simulator. `wss` uses the platform
 trust store; the plugin deliberately has no self-signed certificate bypass.
@@ -22,9 +42,9 @@ but Decaid currently selects one connected Grinder for workflows.
 
 ## Installation
 
-This plugin requires a Decaid build containing the runtime-v2 Grinder contract
-and validated device surfaces (the current `main` line, after the work tracked
-by Decaid #889/#896 and #949/#962). The stable `0.8.8` release has not been
+Version 0.2.0 requires a Decaid build containing the read-only Grinder observation
+contract from #973, such as revision `bafa9b3f2b90e65334e990b0b9601a9965cf979b`,
+in addition to runtime-v2 and validated device surfaces. The stable `0.8.8` release has not been
 validated with this plugin and should not be treated as compatible.
 
 Use Decaid's GitHub-release installer for stable installations. Each release
@@ -53,7 +73,7 @@ The repository and release ZIP keep `manifest.json` and `plugin.js` at their
 package root, as required by Decaid's plugin package resolver.
 
 CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
-and GitHub source archive against Decaid `af4e99524ad7731dbdb7db4540cd272bc91da038`
+and GitHub source archive against Decaid `bafa9b3f2b90e65334e990b0b9601a9965cf979b`
 using Flutter 3.44.2.
 
 Browser contract checks use the repository mock fixture and Playwright Chromium;

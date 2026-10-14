@@ -4,14 +4,74 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../plugin.js', import.meta.url), 'utf8');
-function load(settings, fixture) {
+function load(settings, fixture, timers = {}) {
   const registrations = [];
   const host = {devices: {register(definition, handlers) { registrations.push({definition, handlers}); return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:e64:${definition.instanceId}`}); }}};
-  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent};
+  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent, ...timers};
   vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
   const plugin = sandbox.createPlugin(host);
   return plugin.onLoad(settings).then(() => ({plugin, registrations}));
 }
+
+test('publishes only sensor-valid raw setting observations from native state responses', async () => {
+  for (const [data, expected] of [
+    [{grindState: 'Grinding', ddValueDum: 501, ddSensorFailed: false, fan1TachoRpm: 900}, {state: 'grinding', observedSetting: '501 ddValueDum'}],
+    [{grindState: 'Idle', ddValueDum: 0, ddSensorFailed: false}, {state: 'idle', observedSetting: '0 ddValueDum'}],
+    [{grindState: 'unrecognized', state: 'idle', ddValueDum: 500}, {state: 'unknown'}],
+    [{grindState: 'Grinding', grindFailure: true, ddValueDum: 500, ddSensorFailed: true}, {state: 'error'}],
+    ...[null, '500', -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map(value => [{grindState: 'Idle', ddValueDum: value, ddSensorFailed: false}, {state: 'idle'}]),
+  ]) {
+    const fixture = {sent: [], events: []};
+    const loaded = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', host: 'localhost', port: 9997, pollMs: 0}]), TokensJson: '{"one":"synthetic"}'}, fixture);
+    try {
+      const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async value => {fixture.published = value;}, reportDisconnected: async () => {}});
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(fixture.sent[0], {type: 'RequestDriverState', msgId: 1, data: {}});
+      answer(fixture, 0, data);
+      await connected;
+      assert.deepEqual(JSON.parse(JSON.stringify(fixture.published)), expected);
+    } finally { await loaded.plugin.onUnload(); }
+  }
+});
+
+test('polls replace observations and expiry cannot revive a retired session', async () => {
+  const pending = new Map(); let nextTimer = 0;
+  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay}); return id;}, clearTimeout: id => pending.delete(id)};
+  const fixture = {sent: [], events: []}, published = [];
+  const loaded = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', host: 'localhost', port: 9997, pollMs: 100}]), TokensJson: '{"one":"synthetic"}'}, fixture, timers);
+  const context = {transport: transport(fixture), publish: async value => {published.push(JSON.parse(JSON.stringify(value)));}, reportDisconnected: async () => {}};
+  const connected = loaded.registrations[0].handlers.connect(context);
+  await new Promise(resolve => setImmediate(resolve));
+  answer(fixture, 0, {grindState: 'Idle', ddValueDum: 501, ddSensorFailed: false});
+  await connected;
+  const retiredExpiry = [...pending.values()].find(timer => timer.delay === 5000).callback;
+  const poll = [...pending.entries()].find(([, timer]) => timer.delay === 100);
+  pending.delete(poll[0]); poll[1].callback();
+  answer(fixture, 1, {grindState: 'Grinding', ddSensorFailed: true});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(published.at(-1), {state: 'grinding'});
+  retiredExpiry();
+  assert.deepEqual(published.at(-1), {state: 'grinding'});
+  await loaded.plugin.onUnload();
+  retiredExpiry();
+  assert.equal(published.length, 2);
+  assert.equal(pending.size, 0);
+});
+
+test('one-shot readings expire even when polling is disabled', async () => {
+  const pending = new Map(); let nextTimer = 0;
+  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay}); return id;}, clearTimeout: id => pending.delete(id)};
+  const fixture = {sent: [], events: []}, published = [];
+  const loaded = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', host: 'localhost', port: 9997, pollMs: 0}]), TokensJson: '{"one":"synthetic"}'}, fixture, timers);
+  const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async value => published.push(JSON.parse(JSON.stringify(value))), reportDisconnected: async () => {}});
+  await new Promise(resolve => setImmediate(resolve));
+  answer(fixture, 0, {grindState: 'Idle', ddValueDum: 501, ddSensorFailed: false});
+  await connected;
+  [...pending.values()].find(timer => timer.delay === 5000).callback();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(published, [{state: 'idle', observedSetting: '501 ddValueDum'}, {state: 'idle'}]);
+  await loaded.plugin.onUnload();
+});
 function transport(fixture) {
   return {
     open: async ({url}) => { fixture.url = url; fixture.events = []; return {handle: 1}; },

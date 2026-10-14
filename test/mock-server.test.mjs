@@ -75,11 +75,12 @@ test('public mock authenticates and correlates read replies', async t => {
   const mock = await startMock(t, 'test');
   const socket = await connect(t, mock.port);
   for (const [index, type] of ['RequestDriverState', 'RequestDriverConfig', 'RequestNachineInfo', 'RequestLogMessages'].entries()) {
-    socket.send({type, msgId: index + 17});
+    socket.send({type, msgId: index + 17, data: {}});
     const response = JSON.parse(await socket.next());
     assert.equal(response.type, `${type}Result`);
     assert.equal(response.refId, index + 17);
     assert.equal(typeof response.data, 'object');
+    if (type === 'RequestDriverState') assert.deepEqual(response.data, {grindState: 'idle', ddValueDum: 501, ddSensorFailed: false, fan1TachoRpm: 800, grinder: 'test'});
     if (type === 'RequestNachineInfo') assert.equal(response.data.serial, 'MOCK-test');
   }
   socket.send({type: 'StartMotor', msgId: 99});
@@ -95,15 +96,15 @@ test('public mock rejects bad auth and exercises drop, delay, duplicate, malform
   await assert.rejects(connect(t, mock.port, 'wrong'), /upgrade rejected/);
   const socket = await connect(t, mock.port);
   await mock.control({dropReplies: true});
-  socket.send({type: 'RequestDriverState', msgId: 1});
+  socket.send({type: 'RequestDriverState', msgId: 1, data: {}});
   await assert.rejects(socket.next(80), /message timeout/);
   assert.equal((await mock.health()).counts.RequestDriverState, 1);
   await mock.control({dropReplies: false, delayMs: 80, duplicateReplies: true, state: 'grinding'});
-  socket.send({type: 'RequestDriverState', msgId: 2});
+  socket.send({type: 'RequestDriverState', msgId: 2, data: {}});
   await assert.rejects(socket.next(20), /message timeout/);
   const first = JSON.parse(await socket.next());
   assert.equal(first.refId, 2);
-  assert.equal(first.data.state, 'grinding');
+  assert.equal(first.data.grindState, 'grinding');
   assert.deepEqual(JSON.parse(await socket.next()), first);
   await mock.control({duplicateReplies: false, delayMs: 0, action: 'malformed'});
   const malformed = await socket.next();
