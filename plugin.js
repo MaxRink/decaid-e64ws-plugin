@@ -30,14 +30,16 @@ function createPlugin(host) {
     const result = rows.map((row) => {
       if (!row || typeof row !== "object" || Array.isArray(row)) fail("instances must be objects");
       const id = row.id, name = row.name, scheme = row.scheme === undefined ? "ws" : row.scheme;
+      const tlsTrust = row.tlsTrust === undefined ? "platform" : row.tlsTrust;
       const pollMs = row.pollMs === undefined ? 1000 : row.pollMs;
       if (typeof id !== "string" || !idPattern.test(id) || ids.has(id)) fail("instance ids must be safe and unique");
       if (typeof name !== "string" || !name || name.length > 128) fail("instance name is invalid");
       if ((scheme !== "ws" && scheme !== "wss") || !validHost(row.host) || !Number.isInteger(row.port) || row.port < 1 || row.port > 65535) fail("instance address is invalid");
+      if ((tlsTrust !== "platform" && tlsTrust !== "tofu") || (tlsTrust === "tofu" && scheme !== "wss")) fail("TLS trust must be platform, or tofu with wss");
       if (!Number.isInteger(pollMs) || pollMs < 0 || (pollMs !== 0 && pollMs < 100) || pollMs > 3600000) fail("pollMs is out of bounds");
       if (typeof tokens[id] !== "string" || !tokens[id] || tokens[id].length > 2048) fail("each instance needs a token");
       ids.add(id);
-      return {id, name, scheme, host: row.host, port: row.port, pollMs, token: tokens[id]};
+      return {id, name, scheme, host: row.host, port: row.port, pollMs, tlsTrust, token: tokens[id]};
     });
     if (Object.keys(tokens).some((id) => !ids.has(id))) fail("TokensJson contains an unknown id");
     return result;
@@ -115,6 +117,19 @@ function createPlugin(host) {
     const context = instance.context;
     return disconnect(instance, epoch, reason).finally(() => context && context.reportDisconnected().catch(() => {}));
   }
+  function connectionError(error) {
+    const messages = {
+      tls_trust_unsupported: "This Decaid build does not support E64 certificate trust. Update Decaid before connecting.",
+      tls_trust_required: "Approve this E64 certificate in Decaid's plugin trust settings, then reconnect.",
+      tls_certificate_changed: "The E64 certificate changed. Verify the device before resetting its saved trust in Decaid.",
+      tls_trust_reset: "E64 certificate trust was reset. Approve the device again in Decaid before reconnecting.",
+      tls_trust_invalid: "The E64 certificate is invalid. Check the device certificate, address and date before reconnecting."
+    };
+    const code = error && error.code;
+    const result = new Error(Object.prototype.hasOwnProperty.call(messages, code) ? messages[code] : "E64 connection failed");
+    if (Object.prototype.hasOwnProperty.call(messages, code)) result.code = code;
+    return result;
+  }
   function disconnect(instance, expectedEpoch, reason) {
     if (expectedEpoch !== undefined && expectedEpoch !== instance.epoch) return Promise.resolve();
     const transport = instance.transport, handle = instance.handle;
@@ -126,12 +141,19 @@ function createPlugin(host) {
     const epoch = ++instance.epoch; const transport = context.transport;
     instance.context = context; instance.transport = transport; instance.observations = {}; instance.lastObservationAt = null;
     try {
-      const opened = await transport.open({kind: "websocket", url: url(instance.config)});
+      const options = {kind: "websocket", url: url(instance.config)};
+      let opened;
+      if (instance.config.tlsTrust === "tofu") {
+        if (typeof transport.openStoredIdentity !== "function") throw Object.assign(new Error(), {code: "tls_trust_unsupported"});
+        opened = await transport.openStoredIdentity(options);
+      } else {
+        opened = await transport.open(options);
+      }
       if (epoch !== instance.epoch) { await transport.close(opened.handle).catch(() => {}); return; }
       instance.handle = opened.handle; instance.connected = true;
       transport.onEvent(opened.handle, (eventValue) => event(instance, epoch, opened.handle, eventValue));
       await request(instance, "state", true); schedule(instance, epoch);
-    } catch (_) { await disconnect(instance, epoch, "E64 connection failed"); throw new Error("E64 connection failed"); }
+    } catch (error) { await disconnect(instance, epoch, "E64 connection failed"); throw connectionError(error); }
   }
   function request(instance, name, publish) {
     if (!instance.connected || !instance.transport || !instance.handle) return Promise.reject(new Error("E64 is disconnected"));

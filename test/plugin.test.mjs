@@ -85,6 +85,71 @@ function answer(fixture, index, data) {
   fixture.events[0]({type: 'data', dataType: 'text', data: JSON.stringify({type: request.type + 'Result', refId: request.msgId, data})});
 }
 
+test('TOFU requires secure WebSocket and a recognized trust mode', async () => {
+  for (const row of [
+    {scheme: 'ws', tlsTrust: 'tofu'},
+    {scheme: 'wss', tlsTrust: true},
+    {scheme: 'wss', tlsTrust: 'ignore'},
+  ]) {
+    assert.throws(() => load({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', host: 'localhost', port: 9997, ...row}]), TokensJson: '{"one":"synthetic"}'}, {}), /trust/i);
+  }
+});
+
+test('TOFU refuses an older host before opening any connection', async () => {
+  let opened = 0;
+  const loaded = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', scheme: 'wss', host: 'localhost', port: 9997, tlsTrust: 'tofu'}]), TokensJson: '{"one":"synthetic"}'}, {});
+  await assert.rejects(loaded.registrations[0].handlers.connect({transport: {open: async () => { opened++; return {handle: 1}; }}}), /does not support.*trust/i);
+  assert.equal(opened, 0);
+  await loaded.plugin.onUnload();
+});
+
+test('TOFU uses only the host identity-checked transport method', async () => {
+  const fixture = {sent: [], events: []};
+  const loaded = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', scheme: 'wss', host: 'localhost', port: 9997, pollMs: 0, tlsTrust: 'tofu'}]), TokensJson: '{"one":"synthetic"}'}, fixture);
+  const bound = transport(fixture);
+  bound.openStoredIdentity = bound.open;
+  bound.open = async () => { throw new Error('ordinary open must not run'); };
+  const connecting = loaded.registrations[0].handlers.connect({transport: bound, publish: async () => {}, reportDisconnected: async () => {}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fixture.url, 'wss://localhost:9997/?token=synthetic');
+  answer(fixture, 0, {state: 'idle'});
+  await connecting;
+  await loaded.plugin.onUnload();
+});
+
+test('trust errors are actionable and never repeat native error details', async () => {
+  for (const code of ['tls_trust_required', 'tls_certificate_changed', 'tls_trust_reset', 'tls_trust_invalid']) {
+    const fixture = {sent: [], events: []};
+    const loaded = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', scheme: 'wss', host: 'localhost', port: 9997, tlsTrust: 'tofu'}]), TokensJson: '{"one":"secret-token"}'}, fixture);
+    const nativeError = Object.assign(new Error('wss://localhost/?token=secret-token Authorization: secret-token'), {code});
+    await assert.rejects(loaded.registrations[0].handlers.connect({transport: {openStoredIdentity: async () => { throw nativeError; }}}), error => {
+      assert.equal(error.code, code);
+      assert.doesNotMatch(error.message, /secret-token|wss:|Authorization/);
+      assert.match(error.message, /trust|certificate/i);
+      return true;
+    });
+    await loaded.plugin.onUnload();
+  }
+});
+
+test('pending certificate trust sends no E64 requests and unload fences a late approved handle', async () => {
+  const fixture = {sent: [], events: []};
+  const loaded = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', scheme: 'wss', host: 'localhost', port: 9997, tlsTrust: 'tofu'}]), TokensJson: '{"one":"synthetic"}'}, fixture);
+  let approve;
+  const closed = [];
+  const bound = transport(fixture);
+  bound.openStoredIdentity = () => new Promise(resolve => { approve = resolve; });
+  bound.close = async handle => { closed.push(handle); };
+  const connecting = loaded.registrations[0].handlers.connect({transport: bound, publish: async () => {}, reportDisconnected: async () => {}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(fixture.sent.length, 0);
+  await loaded.plugin.onUnload();
+  approve({handle: 27});
+  await connecting;
+  assert.equal(fixture.sent.length, 0);
+  assert.deepEqual(closed, [27]);
+});
+
 test('registers a read-only Grinder and correlates state', async () => {
   const fixture = {sent: [], events: []};
   const loaded = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', host: '127.0.0.1', port: 9997, pollMs: 0}]), TokensJson: JSON.stringify({one: 'secret'})}, fixture);
