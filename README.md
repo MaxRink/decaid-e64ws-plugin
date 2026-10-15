@@ -34,15 +34,28 @@ display, establishing its calibration/units, and any future grinder-RPM mapping
 remain hardware-validation work tracked in issue #9. No private research source,
 firmware code, device capture or credentials are included in this package.
 
-`ws` is intended for a trusted network or simulator. `wss` uses the platform
-trust store; the plugin deliberately has no self-signed certificate bypass.
+`ws` is intended for a trusted network or simulator. By default, `wss` uses the platform
+trust store. An instance may explicitly set `"tlsTrust": "tofu"` with `"scheme": "wss"`
+to use Decaid's host-managed certificate trust. This requires a host exposing
+`context.transport.openStoredIdentity`; older hosts are rejected before any connection
+is opened, with no automatic downgrade to ordinary TLS.
+
+Approve the device certificate in Decaid's native plugin trust settings before
+reconnecting. Verify that the endpoint is your grinder. The host keeps trust
+scoped to this plugin and endpoint, blocks a changed certificate, and provides
+a dedicated reset button. Reset only after verifying an intentional device or
+certificate change. The URL token is withheld until the host has checked the
+actual connection's certificate. Trust failures show safe next steps without
+repeating tokens, URLs or native error text. This development feature depends
+on the accompanying Decaid #979 implementation; it is not supported by stable
+0.8.8 and has not been validated on real E64 hardware.
 The test suite includes a fake host transport and a real loopback WebSocket
 fixture. No hardware validation is claimed. Multiple instances have independent sockets and protocol state,
 but Decaid currently selects one connected Grinder for workflows.
 
 ## Installation
 
-Version 0.2.0 requires a Decaid build containing the read-only Grinder observation
+Version 0.3.0 requires a Decaid build containing the read-only Grinder observation
 contract from #973, such as revision `bafa9b3f2b90e65334e990b0b9601a9965cf979b`,
 in addition to runtime-v2 and validated device surfaces. The stable `0.8.8` release has not been
 validated with this plugin and should not be treated as compatible.
