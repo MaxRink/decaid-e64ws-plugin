@@ -9,7 +9,7 @@ void main() {
     'local ZIP extraction': 'E64_LOCAL_PACKAGE',
     'GitHub archive extraction': 'E64_GITHUB_PACKAGE',
   }.entries) {
-    test('current pinned Decaid accepts ${entry.key}', () {
+    test('current upstream Decaid accepts ${entry.key}', () {
       final path = Platform.environment[entry.value];
       expect(path, isNotNull);
       final package = resolvePluginPackage(Directory(path!));

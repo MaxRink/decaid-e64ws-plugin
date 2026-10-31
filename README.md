@@ -43,7 +43,7 @@ but Decaid currently selects one connected Grinder for workflows.
 ## Installation
 
 Version 0.2.0 requires a Decaid build containing the read-only Grinder observation
-contract from #973, such as revision `bafa9b3f2b90e65334e990b0b9601a9965cf979b`,
+contract from #973 and tracks upstream Decaid `main` (verified against `df177b75` on 2026-10-31),
 in addition to runtime-v2 and validated device surfaces. The stable `0.8.8` release has not been
 validated with this plugin and should not be treated as compatible.
 
@@ -73,7 +73,7 @@ The repository and release ZIP keep `manifest.json` and `plugin.js` at their
 package root, as required by Decaid's plugin package resolver.
 
 CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
-and GitHub source archive against Decaid `bafa9b3f2b90e65334e990b0b9601a9965cf979b`
+and GitHub source archive against upstream Decaid `main` (verified against `df177b75`)
 using Flutter 3.44.2.
 
 HTTP API contract checks use the repository mock fixture and Playwright's request
