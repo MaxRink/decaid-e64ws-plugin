@@ -36,8 +36,10 @@ firmware code, device capture or credentials are included in this package.
 
 `ws` is intended for a trusted network or simulator. `wss` uses the platform
 trust store; the plugin deliberately has no self-signed certificate bypass.
-The test suite includes a fake host transport and a real loopback WebSocket
-fixture. No hardware validation is claimed. Multiple instances have independent sockets and protocol state,
+The test suite includes a fake host transport, a real loopback WebSocket
+fixture, and a real-QEMU integration guide (`docs/VM_TESTING.md`). The plugin
+also passes the upstream Decaid host-runtime test (`df177b75`). No physical
+hardware validation is claimed. Multiple instances have independent sockets and protocol state,
 but Decaid currently selects one connected Grinder for workflows.
 
 ## Installation

@@ -100,4 +100,7 @@ safe integer `ddValueDum`.
   handlers are absent.
 
 It does **not** prove physical-hardware compatibility, self-signed `wss`
-support (the plugin intentionally rejects it), or a real Decaid host install.
+support (the plugin intentionally rejects it), or a full Decaid GUI install.
+The upstream Decaid host-runtime tests (`ci/host_manifest_compat_test.dart`,
+`ci/host_runtime_test.dart`) were also run against `df177b75` and passed; those
+exercise the real JS host boundary, not the GUI.
