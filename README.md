@@ -102,6 +102,15 @@ License: GPL-3.0-or-later; the complete text is in `LICENSE`. Protocol and
 test behavior is derived from decentespresso/decaid pull request #848, with
 the original Decaid attribution retained in `NOTICE`.
 
+## Real VM test
+
+`docs/VM_TESTING.md` describes the optional integration against the from-SWU
+QEMU grinder: mint a local WSS token, run `tools/ws-bridge.py` in front of the
+VM's TLS WSS, and execute `test/vm-integration.mjs` with the actual
+`plugin.js`. The verified run published `{"state":"idle","observedSetting":"0
+ddValueDum"}` after DD calibration and read live `machineInfo`/`config`
+diagnostics.
+
 ## Public mock fixture
 
 `tools/e64-mock-server.mjs` is a dependency-free WebSocket fixture for local
