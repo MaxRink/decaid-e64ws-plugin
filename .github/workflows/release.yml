@@ -11,7 +11,7 @@ jobs:
   version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - run: python3 scripts/package-plugin.py --tag "$GITHUB_REF_NAME"
 
   checks:
@@ -24,8 +24,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: decaid-e64ws-plugin-${{ github.sha }}
           path: dist
