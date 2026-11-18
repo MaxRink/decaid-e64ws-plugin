@@ -89,7 +89,7 @@ package root, as required by Decaid's plugin package resolver.
 
 CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
 and GitHub source archive against upstream Decaid `main` (verified against `df177b75`)
-using Flutter 3.44.2.
+using Flutter 3.50.0 (Dart 3.14).
 
 HTTP API contract checks use the repository mock fixture and Playwright's request
 client. They run in Node without launching a browser and do not require E64 hardware:
