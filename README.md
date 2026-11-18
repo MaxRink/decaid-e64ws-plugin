@@ -88,8 +88,9 @@ The repository and release ZIP keep `manifest.json` and `plugin.js` at their
 package root, as required by Decaid's plugin package resolver.
 
 CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
-and GitHub source archive against upstream Decaid `main` (verified against `df177b75`)
-using Flutter 3.50.0 (Dart 3.14).
+and GitHub source archive against upstream Decaid `main` using Flutter 3.50.0
+(Dart 3.14); the Linux app smoke pins the verified host `df177b75` with Flutter
+3.44.2 so the UI-runtime check stays comparable to the documented baseline.
 
 HTTP API contract checks use the repository mock fixture and Playwright's request
 client. They run in Node without launching a browser and do not require E64 hardware:
