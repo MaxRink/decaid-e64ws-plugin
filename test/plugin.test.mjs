@@ -384,3 +384,41 @@ test('mint failure is reported without the password', async () => {
   assert.equal(response.body.includes('super-secret-password'), false);
   await loaded.plugin.onUnload();
 });
+
+test('xenia mode maps machine state and acks the E64 routes', async () => {
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]),
+    TokensJson: JSON.stringify({one: 'synthetic'})
+  }, fixture);
+  loaded.plugin.onEvent({name: 'stateUpdate', payload: {
+    state: {state: 'espresso', substate: 'pouring'},
+    flow: 2.5, groupTemperature: 93.2, targetGroupTemperature: 94.0
+  }});
+  const mako = await loaded.plugin.handleHttpRequest({endpoint: 'xenia-mako', method: 'GET', query: {}});
+  assert.equal(mako.status, 200);
+  const makoBody = JSON.parse(mako.body);
+  assert.equal(makoBody.MA_STATUS, 3);
+  assert.equal(makoBody.PU_SENS_FLOW_METER_FLOWRATE, 2.5);
+  assert.equal(makoBody.BG_SET_TEMP, 94);
+  assert.equal(makoBody.BG_SENS_TEMP, 93.2);
+  assert.equal(makoBody.TANK_LEVEL, 1);
+  assert.equal(typeof makoBody.REAL_EXTRACTION_TIME_MS, 'number');
+  const machine = await loaded.plugin.handleHttpRequest({endpoint: 'xenia-machine', method: 'GET', query: {}});
+  assert.equal(JSON.parse(machine.body).MA_TYPE, 'Xenia');
+  const brew = await loaded.plugin.handleHttpRequest({endpoint: 'xenia-brewratio', method: 'POST', query: {}, body: {SYNC_BEVERAGE_WEIGHT: 18.4, SYNC_FILTER: 1}});
+  assert.deepEqual(JSON.parse(brew.body), {MA_SYNC_BEVERAGE_WEIGHT: 18, MA_SYNC_FILTER: 1});
+  const script = await loaded.plugin.handleHttpRequest({endpoint: 'xenia-scripts-execute', method: 'POST', query: {}, body: {ID: 9}});
+  assert.equal(script.status, 200);
+  assert.equal(JSON.parse(script.body).started, false);
+  const diagnostics = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'xenia'}});
+  assert.equal(diagnostics.status, 200);
+  assert.equal(JSON.parse(diagnostics.body).mako.MA_STATUS, 3);
+  loaded.plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'espresso', substate: 'pouringDone'}, flow: 0, groupTemperature: 93.1, targetGroupTemperature: 94}});
+  const finishing = JSON.parse((await loaded.plugin.handleHttpRequest({endpoint: 'xenia-mako', method: 'GET', query: {}})).body);
+  assert.equal(finishing.MA_STATUS, 4);
+  loaded.plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'idle', substate: 'idle'}, flow: 0}});
+  const idle = JSON.parse((await loaded.plugin.handleHttpRequest({endpoint: 'xenia-mako', method: 'GET', query: {}})).body);
+  assert.equal(idle.MA_STATUS, 1);
+  await loaded.plugin.onUnload();
+});

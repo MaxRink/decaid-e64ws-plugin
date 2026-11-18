@@ -95,9 +95,19 @@ Dynamic tokens are cleared on disconnect and re-minted on the next connect.
 the token or password. Static `TokensJson` values are reused, so a static token
 must be refreshed manually after a single-connection close.
 
+## Xenia mode
+
+The plugin can present the Decaid host as a local **Xenia** to the E64's stock
+M2M client. The E64 calls `http://<host>/api/v2/*` on port 80, so a small
+host-side sidecar (`tools/xenia_bridge.py`) forwards those routes to the plugin
+endpoints. No E64 root or firmware change is involved; only the M2M host field
+changes. `scripts/execute` is acknowledged but does not start a brew.
+
+See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
+
 ## Installation
 
-Version 0.3.0 requires a Decaid build containing the read-only Grinder observation
+Version 0.4.0 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and tracks upstream Decaid `main` (verified against `df177b75` on 2026-10-31),
 in addition to runtime-v2 and validated device surfaces. The stable `0.8.8` release has not been
 validated with this plugin and should not be treated as compatible.

@@ -147,6 +147,99 @@ function createPlugin(host) {
     if (["error", "fault"].includes(normalized)) return "error";
     return "unknown";
   }
+
+  // --- Xenia-compatible surface ----------------------------------------
+  // The E64 polls http://<host>/api/v2/* on port 80. A Decaid plugin cannot
+  // bind that port, so tools/xenia_bridge.py proxies those paths to these
+  // endpoints. State is derived from Decaid's machine stateUpdate events.
+  const xenia = {
+    maStatus: 1, extractionStatus: 0, flow: 0, volumeMl: 0,
+    setTemp: 0, sensTemp: 0, tankLevel: 1,
+    extractionStart: null, extractionDurationMs: 0, lastUpdate: null,
+    syncWeight: 0, syncFilter: 0, lastScriptId: null, lastScriptAt: null
+  };
+  function round(value, digits) {
+    const factor = Math.pow(10, digits);
+    return Math.round((Number(value) || 0) * factor) / factor;
+  }
+  function xeniaTimestamp() {
+    const d = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()) +
+      " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+  function updateXenia(payload) {
+    if (!payload || typeof payload !== "object") return;
+    const state = payload.state && typeof payload.state.state === "string" ? payload.state.state : "";
+    const substate = payload.state && typeof payload.state.substate === "string" ? payload.state.substate : "";
+    const now = Date.now();
+    const dt = xenia.lastUpdate === null ? 0 : Math.max(0, (now - xenia.lastUpdate) / 1000);
+    xenia.lastUpdate = now;
+    xenia.flow = Number(payload.flow) || 0;
+    xenia.setTemp = Number(payload.targetGroupTemperature) || 0;
+    xenia.sensTemp = Number(payload.groupTemperature) || 0;
+    xenia.tankLevel = state === "needsWater" ? 0 : 1;
+    const serving = state === "espresso" &&
+      (substate === "preparingForShot" || substate === "preinfusion" || substate === "pouring");
+    if (serving) {
+      if (xenia.maStatus !== 3) {
+        xenia.maStatus = 3;
+        xenia.extractionStatus = 1;
+        xenia.extractionStart = now;
+        xenia.extractionDurationMs = 0;
+        xenia.volumeMl = 0;
+      } else {
+        xenia.volumeMl += Math.max(0, xenia.flow) * dt;
+      }
+      return;
+    }
+    if (state === "espresso" && substate === "pouringDone") {
+      if (xenia.maStatus !== 4) {
+        xenia.maStatus = 4;
+        xenia.extractionStatus = 0;
+        xenia.extractionDurationMs = xenia.extractionStart === null
+          ? 0 : Math.max(0, now - xenia.extractionStart);
+      }
+      return;
+    }
+    xenia.maStatus = 1;
+    xenia.extractionStatus = 0;
+    xenia.extractionStart = null;
+    // Keep the last duration/volume until the next serving start so a poll
+    // after finishing still sees the completed shot.
+  }
+  function xeniaMako() {
+    const liveMs = xenia.maStatus === 3 && xenia.extractionStart !== null
+      ? Math.max(0, Date.now() - xenia.extractionStart) : xenia.extractionDurationMs;
+    return {
+      MA_STATUS: xenia.maStatus,
+      PU_SENS_FLOW_METER_VOLUME: round(xenia.volumeMl, 2),
+      PU_SENS_FLOW_METER_FLOWRATE: round(xenia.flow, 2),
+      MA_EXTRACTION_STATUS: xenia.extractionStatus,
+      BG_SET_TEMP: round(xenia.setTemp, 1),
+      BG_SENS_TEMP: round(xenia.sensTemp, 1),
+      REAL_EXTRACTION_TIME_MS: Math.max(0, Math.round(liveMs)),
+      TANK_LEVEL: xenia.tankLevel,
+      TIMESTAMP: xeniaTimestamp(),
+      script: "Decaid"
+    };
+  }
+  function xeniaMachine() {
+    return {
+      MA_TYPE: "Xenia", MA_SN: "DECAID-XENIA",
+      FW_VERSION_MAJOR: 1, FW_VERSION_MINOR: 0,
+      ESP_FW_MAJOR: 0, ESP_FW_MINOR: 0
+    };
+  }
+  function xeniaRead() {
+    return {
+      mako: xeniaMako(), machine: xeniaMachine(),
+      sync: {SYNC_BEVERAGE_WEIGHT: xenia.syncWeight, SYNC_FILTER: xenia.syncFilter},
+      lastScriptId: xenia.lastScriptId, lastScriptAt: xenia.lastScriptAt,
+      brewStartAutomated: false
+    };
+  }
+
   function make(config) {
     return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, observationExpiry: null, connected: false, observations: {}, lastObservationAt: null, tokenSource: config.staticToken ? "static" : "none", lastMintAt: null, lastMintError: null};
   }
@@ -280,14 +373,41 @@ function createPlugin(host) {
       return Promise.all(configs.map((config) => { const instance = make(config); instances.set(config.id, instance); return host.devices.register({driverId: "e64", instanceId: config.id, name: config.name}, {connect: (context) => connect(instance, context), disconnect: () => disconnect(instance)}).then((device) => { instance.deviceId = device.deviceId; return device; }); }));
     },
     onUnload() { return Promise.all(Array.from(instances.values()).map((instance) => disconnect(instance))); },
+    onEvent(event) { if (event && event.name === "stateUpdate" && event.payload) updateXenia(event.payload); },
     handleHttpRequest(request) {
-      if (request.endpoint !== "e64-diagnostics" || request.method !== "GET") return {status: 405, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "method not allowed"})};
+      const jsonResponse = (status, payload) => ({status, headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+      if (request.endpoint === "xenia-mako" || request.endpoint === "xenia-machine" ||
+          request.endpoint === "xenia-brewratio" || request.endpoint === "xenia-scripts-execute") {
+        if (request.endpoint === "xenia-mako") {
+          return request.method === "GET" ? jsonResponse(200, xeniaMako()) : jsonResponse(405, {error: "method not allowed"});
+        }
+        if (request.endpoint === "xenia-machine") {
+          return request.method === "GET" ? jsonResponse(200, xeniaMachine()) : jsonResponse(405, {error: "method not allowed"});
+        }
+        if (request.method !== "POST") return jsonResponse(405, {error: "method not allowed"});
+        const body = request.body;
+        if (!body || typeof body !== "object" || Array.isArray(body)) return jsonResponse(400, {error: "invalid body"});
+        if (request.endpoint === "xenia-brewratio") {
+          const weight = Number(body.SYNC_BEVERAGE_WEIGHT);
+          const filter = Number(body.SYNC_FILTER);
+          if (!Number.isFinite(weight) || !Number.isInteger(filter)) return jsonResponse(400, {error: "invalid brew ratio"});
+          xenia.syncWeight = Math.round(weight);
+          xenia.syncFilter = filter;
+          return jsonResponse(200, {MA_SYNC_BEVERAGE_WEIGHT: xenia.syncWeight, MA_SYNC_FILTER: xenia.syncFilter});
+        }
+        if (!Number.isInteger(body.ID)) return jsonResponse(400, {error: "invalid script ID"});
+        xenia.lastScriptId = body.ID;
+        xenia.lastScriptAt = new Date().toISOString();
+        return jsonResponse(200, {ok: true, ID: body.ID, started: false});
+      }
+      if (request.endpoint !== "e64-diagnostics" || request.method !== "GET") return jsonResponse(405, {error: "method not allowed"});
       const id = request.query && request.query.deviceId;
       const instance = Array.from(instances.values()).find((candidate) => candidate.deviceId === id);
       if (!instance) return {status: 404, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unknown instance"})};
       const read = request.query.read;
-      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "logs" && read !== "connection") return {status: 400, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unsupported read"})};
+      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "logs" && read !== "connection" && read !== "xenia") return jsonResponse(400, {error: "unsupported read"});
       const operation = read === undefined ? null : read;
+      if (operation === "xenia") return Promise.resolve(jsonResponse(200, xeniaRead()));
       if (operation === "connection") {
         const connection = {connected: instance.connected, tokenSource: instance.tokenSource,
           lastMintAt: instance.lastMintAt, lastMintError: instance.lastMintError,
