@@ -63,7 +63,7 @@ is the physical counterpart.
 ## What was not confirmed
 
 - The normal no-password UI path still does not deliver a token. The live token
-  was minted through the documented login-construction test (SELECT-only; no
+  was minted through the documented FW-01 login-construction test (SELECT-only; no
   database row written), not through `login.php` or `rest_api/login` with an
   empty password.
 - The Decaid host transport and the platform trust-store path were not
