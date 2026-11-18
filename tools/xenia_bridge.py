@@ -93,7 +93,11 @@ class Handler(BaseHTTPRequestHandler):
         if endpoint is None:
             self._respond(404, b'{"error":"unknown Xenia route"}', "application/json")
             return
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            self._respond(400, b'{"error":"invalid Content-Length"}', "application/json")
+            return
         if length < 0 or length > MAX_BODY:
             self._respond(413, b'{"error":"body too large"}', "application/json")
             return
