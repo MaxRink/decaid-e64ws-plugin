@@ -28,10 +28,15 @@ reads do not refresh it.
 Native `grindState` takes precedence over legacy `state`/`status`/`mode` aliases;
 unrecognized state values remain `unknown`, and `grindFailure: true` reports
 `error`. No grinder RPM observation is declared: cooling-fan tachometer values
-are not grinder motor RPM. The field mapping is based on static protocol evidence,
-not a physical capture. Comparing the raw setting with the actual firmware and
+are not grinder motor RPM. The field mapping is based on static protocol
+evidence and QEMU fixtures, not a physical capture. A read-only pass on
+2026-11-18 reached a physical `E64 WS` (`V01.16 build #24`, `custom`) and
+confirmed the HTTPS/WSS transport, the static TLS certificate and the WSS token
+gate, but no usable token could be minted, so `RequestDriverState` was never
+exercised on hardware. Comparing the raw setting with the actual firmware and
 display, establishing its calibration/units, and any future grinder-RPM mapping
-remain hardware-validation work tracked in issue #9. No private research source,
+remain hardware-validation work tracked in issue #9. See
+[`docs/LIVE_VALIDATION.md`](docs/LIVE_VALIDATION.md). No private research source,
 firmware code, device capture or credentials are included in this package.
 
 `ws` is intended for a trusted network or simulator. `wss` uses the platform
@@ -39,7 +44,8 @@ trust store; the plugin deliberately has no self-signed certificate bypass.
 The test suite includes a fake host transport, a real loopback WebSocket
 fixture, and a real-QEMU integration guide (`docs/VM_TESTING.md`). The plugin
 also passes the upstream Decaid host-runtime test (`df177b75`). No physical
-hardware validation is claimed. Multiple instances have independent sockets and protocol state,
+state or observation validation is claimed; the 2026-11-18 live pass was
+transport-only. Multiple instances have independent sockets and protocol state,
 but Decaid currently selects one connected Grinder for workflows.
 
 ## Installation
@@ -174,4 +180,5 @@ The tag-triggered release workflow reruns the complete repository CI and publish
 the tested archive only after all jobs pass. `npm run package` produces a
 deterministic archive under `dist/`; documentation, mocks and CI fixtures remain
 in the repository. CI proves synthetic software behavior, not physical hardware
-or firmware compatibility.
+or firmware compatibility. The 2026-11-18 live pass is transport-only; see
+[`docs/LIVE_VALIDATION.md`](docs/LIVE_VALIDATION.md).
