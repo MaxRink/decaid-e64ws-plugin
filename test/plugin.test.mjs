@@ -221,3 +221,27 @@ test('late open handles are closed after disconnect wins the race', async () => 
   await connecting;
   assert.equal(fixture.closes, 1);
 });
+
+test('replays the live 2026-11-18 state and config capture', async () => {
+  const fixture = {sent: [], events: []};
+  const state = JSON.parse(fs.readFileSync(new URL('./fixtures/live-driver-state.json', import.meta.url), 'utf8'));
+  const config = JSON.parse(fs.readFileSync(new URL('./fixtures/live-driver-config.json', import.meta.url), 'utf8'));
+  const machineInfo = JSON.parse(fs.readFileSync(new URL('./fixtures/live-machine-info.json', import.meta.url), 'utf8'));
+  const loaded = await load({InstancesJson: JSON.stringify([{id: 'live', name: 'Live E64', host: '127.0.0.1', port: 9997, pollMs: 0}]), TokensJson: JSON.stringify({live: 'synthetic'})}, fixture);
+  const context = {transport: transport(fixture), publish: async (value) => { fixture.published = value; }, reportDisconnected: async () => {}};
+  const connected = loaded.registrations[0].handlers.connect(context);
+  await new Promise((resolve) => setImmediate(resolve));
+  answer(fixture, 0, state);
+  await connected;
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.published)), {state: 'idle', observedSetting: '854 ddValueDum'});
+  const deviceId = 'plugin:mahlkoenig-e64.reaplugin:e64:live';
+  const info = loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId, read: 'machineInfo'}});
+  await new Promise((resolve) => setImmediate(resolve));
+  answer(fixture, 1, machineInfo);
+  assert.equal((await info).status, 200);
+  const cfg = loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId, read: 'config'}});
+  await new Promise((resolve) => setImmediate(resolve));
+  answer(fixture, 2, config);
+  assert.equal((await cfg).status, 200);
+  await loaded.plugin.onUnload();
+});
