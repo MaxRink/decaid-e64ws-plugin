@@ -28,19 +28,32 @@ reads do not refresh it.
 Native `grindState` takes precedence over legacy `state`/`status`/`mode` aliases;
 unrecognized state values remain `unknown`, and `grindFailure: true` reports
 `error`. No grinder RPM observation is declared: cooling-fan tachometer values
-are not grinder motor RPM. The field mapping is based on static protocol evidence,
-not a physical capture. Comparing the raw setting with the actual firmware and
-display, establishing its calibration/units, and any future grinder-RPM mapping
-remain hardware-validation work tracked in issue #9. No private research source,
-firmware code, device capture or credentials are included in this package.
+are not grinder motor RPM. The field mapping is based on static protocol
+evidence, QEMU fixtures and a 2026-11-18 physical read pass. That pass reached
+an `E64 WS` (`V01.16 build #24`, `custom`), confirmed the HTTPS/WSS transport,
+the static TLS certificate and the WSS token gate, and used a normal read-only
+token to capture `RequestDriverState`, `RequestDriverConfig` and
+`RequestNachineInfo`. The live state returned `ddValueDum=854`,
+`grindState=idle`, `overshootWeightGr=0.53696`, both fan tachos `0` and NTC2
+absent. The shipped plugin was also run against the live unit through a Node
+WebSocket harness and published `{"state":"idle","observedSetting":"854
+ddValueDum"}`; diagnostics `machineInfo` and `config` returned HTTP 200.
+Calibration/units and any future grinder-RPM mapping remain
+hardware-validation work tracked in issue #9. The live token was
+single-connection, so a reconnect needs a fresh token. See
+[`docs/LIVE_VALIDATION.md`](docs/LIVE_VALIDATION.md). No private research
+source, firmware code, device capture or credentials are included in this
+package.
 
 `ws` is intended for a trusted network or simulator. `wss` uses the platform
 trust store; the plugin deliberately has no self-signed certificate bypass.
 The test suite includes a fake host transport, a real loopback WebSocket
 fixture, and a real-QEMU integration guide (`docs/VM_TESTING.md`). The plugin
 also passes the upstream Decaid host-runtime test (`df177b75`). No physical
-hardware validation is claimed. Multiple instances have independent sockets and protocol state,
-but Decaid currently selects one connected Grinder for workflows.
+action or calibration validation is claimed; the 2026-11-18 pass was read-only
+and ran the plugin through a WebSocket harness, not Decaid's host transport.
+Multiple instances have independent sockets and protocol state, but Decaid
+currently selects one connected Grinder for workflows.
 
 ## Installation
 
@@ -75,8 +88,9 @@ The repository and release ZIP keep `manifest.json` and `plugin.js` at their
 package root, as required by Decaid's plugin package resolver.
 
 CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
-and GitHub source archive against upstream Decaid `main` (verified against `df177b75`)
-using Flutter 3.44.2.
+and GitHub source archive against upstream Decaid `main` using Flutter 3.50.0
+(Dart 3.14); the Linux app smoke pins the verified host `df177b75` with Flutter
+3.44.2 so the UI-runtime check stays comparable to the documented baseline.
 
 HTTP API contract checks use the repository mock fixture and Playwright's request
 client. They run in Node without launching a browser and do not require E64 hardware:
@@ -174,4 +188,5 @@ The tag-triggered release workflow reruns the complete repository CI and publish
 the tested archive only after all jobs pass. `npm run package` produces a
 deterministic archive under `dist/`; documentation, mocks and CI fixtures remain
 in the repository. CI proves synthetic software behavior, not physical hardware
-or firmware compatibility.
+or firmware compatibility. The 2026-11-18 live pass is a read-only runtime
+check; see [`docs/LIVE_VALIDATION.md`](docs/LIVE_VALIDATION.md).
