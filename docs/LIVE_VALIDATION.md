@@ -55,6 +55,20 @@ trust-store path; the existing host TLS tests cover that boundary. The Decaid
 host transport itself was not used — this was a Node WebSocket harness around
 the shipped plugin.
 
+## Clean-token addendum (Owner password set)
+
+The owner later set an Owner password. A normal `POST /rest_api/login` with
+`{"userRole":"Owner","password":"…"}` then returned a bearer token, and
+`login.php` returned the HTTP 200 login form instead of the passwordless
+redirect. The plugin's password-minting path (`MintTokens` + secure
+`PasswordsJson`) was run against the live unit: it minted a token, connected,
+published `817 ddValueDum`, and both diagnostics reads returned HTTP 200.
+
+The earlier `854` reading and the later `817` reading are the same raw field at
+different dial positions; the config was unchanged. The FW-01 no-password
+workaround is no longer needed on this unit but remains available behind
+`AllowNoPasswordWorkaround` for owner-controlled devices.
+
 The database export does not contain a live `RequestDriverState` response. The
 `grind_log.grind_ddd` range is supporting context for the "opaque ddValueDum"
 decision, not a substitute for the state capture. The live state response above

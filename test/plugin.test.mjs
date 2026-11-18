@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../plugin.js', import.meta.url), 'utf8');
-function load(settings, fixture, timers = {}) {
+function load(settings, fixture, timers = {}, fetchImpl = null) {
   const registrations = [];
   const host = {devices: {register(definition, handlers) { registrations.push({definition, handlers}); return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:e64:${definition.instanceId}`}); }}};
-  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent, ...timers};
+  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent, btoa: globalThis.btoa, ...(fetchImpl ? {fetch: fetchImpl} : {}), ...timers};
   vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
   const plugin = sandbox.createPlugin(host);
   return plugin.onLoad(settings).then(() => ({plugin, registrations}));
@@ -244,4 +244,72 @@ test('replays the live 2026-11-18 state and config capture', async () => {
   answer(fixture, 2, config);
   assert.equal((await cfg).status, 200);
   await loaded.plugin.onUnload();
+});
+
+
+test('mints a token from a configured Owner password', async () => {
+  let request;
+  const fetchImpl = async (url, init) => {
+    request = {url, init};
+    return {ok: true, status: 200, headers: {get: () => 'Bearer minted-token'}, text: async () => ''};
+  };
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]),
+    TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: 'pw'})
+  }, fixture, {}, fetchImpl);
+  const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async value => {fixture.published = value;}, reportDisconnected: async () => {}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(request.url, 'https://127.0.0.1/rest_api/login');
+  assert.equal(JSON.parse(request.init.body).userRole, 'Owner');
+  assert.equal(JSON.parse(request.init.body).password, 'pw');
+  assert.match(fixture.url, /token=minted-token$/);
+  answer(fixture, 0, {grindState: 'Idle', ddValueDum: 854, ddSensorFailed: false});
+  await connected;
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.published)), {state: 'idle', observedSetting: '854 ddValueDum'});
+  await loaded.plugin.onUnload();
+});
+
+test('mints through the gated no-password workaround', async () => {
+  let body;
+  const fetchImpl = async (_url, init) => {
+    body = JSON.parse(init.body);
+    return {ok: true, status: 200, headers: {get: () => 'Bearer workaround-token'}, text: async () => ''};
+  };
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]),
+    TokensJson: '{}', MintTokens: 'true', AllowNoPasswordWorkaround: 'true'
+  }, fixture, {}, fetchImpl);
+  const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(body.userRole, /^x" UNION SELECT "1\$1000\$/);
+  assert.ok(body.password.length >= 32);
+  assert.match(fixture.url, /token=workaround-token$/);
+  answer(fixture, 0, {grindState: 'Idle', ddValueDum: 854, ddSensorFailed: false});
+  await connected;
+  await loaded.plugin.onUnload();
+});
+
+test('static tokens do not call fetch', async () => {
+  let calls = 0;
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]),
+    TokensJson: JSON.stringify({one: 'static-token'})
+  }, fixture, {}, async () => { calls++; throw new Error('must not fetch'); });
+  const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 0);
+  assert.match(fixture.url, /token=static-token$/);
+  answer(fixture, 0, {grindState: 'Idle'});
+  await connected;
+  await loaded.plugin.onUnload();
+});
+
+test('minting needs a password or the workaround', async () => {
+  await assert.rejects(async () => load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]),
+    TokensJson: '{}', MintTokens: 'true'
+  }, {sent: [], events: []}, {}, async () => { throw new Error('must not fetch'); }));
 });

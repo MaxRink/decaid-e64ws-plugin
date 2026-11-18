@@ -12,7 +12,11 @@ publishes the generic Grinder state (`idle`, `grinding`, `error`, or
 `RequestNachineInfo`, and `RequestLogMessages` are available through the
 diagnostics surface. There are no motor, grind-setting, RPM, calibration, or
 GBS writes. Configure `InstancesJson` and secure `TokensJson` in the plugin
-settings. `pollMs` defaults to 1000 and may be set to 0 to disable polling.
+settings. For automatic token minting, also set `MintTokens` to `true` and put
+the current Owner password in the secure `PasswordsJson`; `TokensJson` entries
+may then be empty. The gated `AllowNoPasswordWorkaround` setting can use the
+documented FW-01 SELECT-only login construction when no Owner password is set.
+`pollMs` defaults to 1000 and may be set to 0 to disable polling.
 
 The setting comes only from a `RequestDriverStateResult` containing a
 nonnegative safe-integer `ddValueDum` and an explicit `ddSensorFailed: false`.
@@ -55,9 +59,38 @@ and ran the plugin through a WebSocket harness, not Decaid's host transport.
 Multiple instances have independent sockets and protocol state, but Decaid
 currently selects one connected Grinder for workflows.
 
+## Token acquisition
+
+The E64 WSS listener needs a five-minute bearer token. There are three ways to
+provide it:
+
+1. **Static token (default).** Put a token in `TokensJson`:
+   `{"one":"<64-hex-token>"}`. The live token is single-connection; supply a
+   fresh one for every reconnect.
+2. **Owner password (recommended).** Set `MintTokens` to `"true"` and put the
+   device's current Owner password in the secure `PasswordsJson`:
+   `{"one":"<owner-password>"}`. On each connect the plugin calls
+   `POST https://<host>/rest_api/login` and uses the returned bearer token.
+   The password is never logged.
+3. **No-password workaround (gated).** If the device has no Owner password,
+   set `MintTokens` to `"true"` and `AllowNoPasswordWorkaround` to `"true"`.
+   The plugin uses the documented FW-01 SELECT-only login construction to mint
+   a normal session token. This is an authentication bypass; enable it only on
+   an owner-controlled device. The database is not written.
+
+The plugin uses the host's platform trust store for `fetch()` and `wss`. The
+E64 serves a self-signed certificate, so trust `webui.crt` in the host OS or use
+a static token obtained from a machine that does. The plugin deliberately does
+not bypass TLS.
+
+A clean Owner-password login was confirmed on 2026-11-18. The live unit served
+`ddValueDum=854` in the first session and `817` in a later clean-token session
+after the dial moved; the plugin minted a token from the password and published
+`817 ddValueDum`.
+
 ## Installation
 
-Version 0.2.0 requires a Decaid build containing the read-only Grinder observation
+Version 0.3.0 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and tracks upstream Decaid `main` (verified against `df177b75` on 2026-10-31),
 in addition to runtime-v2 and validated device surfaces. The stable `0.8.8` release has not been
 validated with this plugin and should not be treated as compatible.

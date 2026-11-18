@@ -1,22 +1,32 @@
 {
   "id": "mahlkoenig-e64.reaplugin",
-  "name": "Mahlkönig E64",
+  "name": "Mahlk\u00f6nig E64",
   "author": "Decaid contributors",
-  "description": "Read-only Mahlkönig E64 grinder telemetry over WebSocket.",
-  "version": "0.2.0",
+  "description": "Read-only Mahlk\u00f6nig E64 grinder telemetry over WebSocket.",
+  "version": "0.3.0",
   "apiVersion": 1,
-  "permissions": ["log", "api", "network.websocket"],
-  "drivers": [{
-    "id": "e64",
-    "type": "grinder",
-    "observations": ["setting"],
-    "surfaces": [{
-      "id": "diagnostics",
-      "role": "diagnostics",
-      "endpoint": "e64-diagnostics",
-      "label": "E64 diagnostics"
-    }]
-  }],
+  "permissions": [
+    "log",
+    "api",
+    "network.websocket"
+  ],
+  "drivers": [
+    {
+      "id": "e64",
+      "type": "grinder",
+      "observations": [
+        "setting"
+      ],
+      "surfaces": [
+        {
+          "id": "diagnostics",
+          "role": "diagnostics",
+          "endpoint": "e64-diagnostics",
+          "label": "E64 diagnostics"
+        }
+      ]
+    }
+  ],
   "settings": {
     "InstancesJson": {
       "type": "string",
@@ -30,7 +40,32 @@
       "description": "JSON object mapping instance ids to WebSocket tokens.",
       "secure": true,
       "default": "{}"
+    },
+    "MintTokens": {
+      "type": "string",
+      "label": "Mint tokens on connect",
+      "description": "When true, empty TokensJson entries are filled by logging in on each connect. Requires PasswordsJson or AllowNoPasswordWorkaround.",
+      "default": "false"
+    },
+    "PasswordsJson": {
+      "type": "string",
+      "label": "E64 Owner passwords",
+      "description": "JSON object mapping instance ids to the current Owner password. Stored as a secure setting and never logged.",
+      "secure": true,
+      "default": "{}"
+    },
+    "AllowNoPasswordWorkaround": {
+      "type": "string",
+      "label": "Allow no-password workaround",
+      "description": "Use the documented FW-01 SELECT-only login construction when no Owner password is set. This is an authentication bypass; enable only on an owner-controlled device. Default false.",
+      "default": "false"
     }
   },
-  "api": [{"id": "e64-diagnostics", "type": "http", "data": {}}]
+  "api": [
+    {
+      "id": "e64-diagnostics",
+      "type": "http",
+      "data": {}
+    }
+  ]
 }
