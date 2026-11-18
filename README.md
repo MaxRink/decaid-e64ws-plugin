@@ -81,12 +81,19 @@ provide it:
 The plugin uses the host's platform trust store for `fetch()` and `wss`. The
 E64 serves a self-signed certificate, so trust `webui.crt` in the host OS or use
 a static token obtained from a machine that does. The plugin deliberately does
-not bypass TLS.
+not bypass TLS. See [docs/CERTIFICATE_TRUST.md](docs/CERTIFICATE_TRUST.md) for
+macOS, Linux, Android and Windows steps.
 
 A clean Owner-password login was confirmed on 2026-11-18. The live unit served
 `ddValueDum=854` in the first session and `817` in a later clean-token session
 after the dial moved; the plugin minted a token from the password and published
 `817 ddValueDum`.
+
+Dynamic tokens are cleared on disconnect and re-minted on the next connect.
+`GET <diagnostics>?read=connection` reports `connected`, `tokenSource`,
+`lastMintAt`, `lastMintError`, `staticToken` and `mintTokens`; it never returns
+the token or password. Static `TokensJson` values are reused, so a static token
+must be refreshed manually after a single-connection close.
 
 ## Installation
 

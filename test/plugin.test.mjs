@@ -313,3 +313,74 @@ test('minting needs a password or the workaround', async () => {
     TokensJson: '{}', MintTokens: 'true'
   }, {sent: [], events: []}, {}, async () => { throw new Error('must not fetch'); }));
 });
+
+test('re-mints a fresh token after a disconnect', async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return {ok: true, status: 200, headers: {get: () => `Bearer token-${calls}`}, text: async () => ''};
+  };
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]),
+    TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: 'pw'})
+  }, fixture, {}, fetchImpl);
+  const context = {transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}};
+  const first = loaded.registrations[0].handlers.connect(context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(fixture.url, /token=token-1$/);
+  answer(fixture, 0, {grindState: 'Idle'});
+  await first;
+  fixture.events[0]({type: 'close'});
+  await new Promise(resolve => setImmediate(resolve));
+  const second = loaded.registrations[0].handlers.connect(context);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(fixture.url, /token=token-2$/);
+  answer(fixture, 1, {grindState: 'Idle'});
+  await second;
+  assert.equal(calls, 2);
+  await loaded.plugin.onUnload();
+});
+
+test('connection diagnostics report the token source without secrets', async () => {
+  const fetchImpl = async () => ({ok: true, status: 200, headers: {get: () => 'Bearer secret-token'}, text: async () => ''});
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]),
+    TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: 'pw'})
+  }, fixture, {}, fetchImpl);
+  const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
+  await new Promise(resolve => setImmediate(resolve));
+  answer(fixture, 0, {grindState: 'Idle'});
+  await connected;
+  const response = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'connection'}});
+  assert.equal(response.status, 200);
+  assert.equal(response.body.includes('secret-token'), false);
+  assert.equal(response.body.includes('pw'), false);
+  const body = JSON.parse(response.body);
+  assert.equal(body.tokenSource, 'password');
+  assert.equal(body.lastMintError, null);
+  assert.equal(typeof body.lastMintAt, 'string');
+  assert.equal(body.staticToken, false);
+  await loaded.plugin.onUnload();
+});
+
+test('mint failure is reported without the password', async () => {
+  const fetchImpl = async () => ({ok: false, status: 400, headers: {get: () => null}, text: async () => '{"console":"Wrong password!"}'});
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]),
+    TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: 'super-secret-password'})
+  }, fixture, {}, fetchImpl);
+  await assert.rejects(async () => loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    assert.match(error.message, /login HTTP 400/);
+    assert.equal(error.message.includes('super-secret-password'), false);
+    return true;
+  });
+  const response = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'connection'}});
+  const body = JSON.parse(response.body);
+  assert.equal(body.tokenSource, 'none');
+  assert.match(body.lastMintError, /login HTTP 400/);
+  assert.equal(response.body.includes('super-secret-password'), false);
+  await loaded.plugin.onUnload();
+});

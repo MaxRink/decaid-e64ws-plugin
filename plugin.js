@@ -148,7 +148,7 @@ function createPlugin(host) {
     return "unknown";
   }
   function make(config) {
-    return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, observationExpiry: null, connected: false, observations: {}, lastObservationAt: null};
+    return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, observationExpiry: null, connected: false, observations: {}, lastObservationAt: null, tokenSource: config.staticToken ? "static" : "none", lastMintAt: null, lastMintError: null};
   }
   function clear(instance) { if (instance.poll !== null) clearTimeout(instance.poll); instance.poll = null; clearTimeout(instance.observationExpiry); instance.observationExpiry = null; }
   function rejectAll(instance, reason) { for (const item of instance.pending.values()) { clearTimeout(item.timer); item.reject(new Error(reason)); } instance.pending.clear(); }
@@ -206,32 +206,42 @@ function createPlugin(host) {
     const context = instance.context;
     return disconnect(instance, epoch, reason).finally(() => context && context.reportDisconnected().catch(() => {}));
   }
-  async function mintToken(config) {
+  async function mintToken(instance) {
+    const config = instance.config;
     let role = "Owner", password = config.password;
     if (!password) {
       if (!config.allowNoPassword) throw new Error("no token, password or workaround configured");
       const payload = noPasswordPayload();
       role = payload.role; password = payload.password;
     }
-    const response = await fetch("https://" + hostName(config) + "/rest_api/login", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({userRole: role, password})
-    });
-    if (!response || !response.ok) {
-      let detail = "";
-      try { detail = (await response.text()).slice(0, 200); } catch (_) {}
-      throw new Error("login HTTP " + (response && response.status) + (detail ? " " + detail : ""));
+    try {
+      const response = await fetch("https://" + hostName(config) + "/rest_api/login", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({userRole: role, password})
+      });
+      if (!response || !response.ok) {
+        let detail = "";
+        try { detail = (await response.text()).slice(0, 200); } catch (_) {}
+        throw new Error("login HTTP " + (response && response.status) + (detail ? " " + detail : ""));
+      }
+      const auth = response.headers && response.headers.get ? response.headers.get("authorization") : "";
+      if (!auth || !auth.startsWith("Bearer ")) throw new Error("login returned no bearer token");
+      instance.tokenSource = config.password ? "password" : "workaround";
+      instance.lastMintAt = new Date().toISOString();
+      instance.lastMintError = null;
+      return auth.slice(7).trim();
+    } catch (error) {
+      instance.tokenSource = "none";
+      instance.lastMintError = error && error.message ? error.message : "token mint failed";
+      throw error;
     }
-    const auth = response.headers && response.headers.get ? response.headers.get("authorization") : "";
-    if (!auth || !auth.startsWith("Bearer ")) throw new Error("login returned no bearer token");
-    return auth.slice(7).trim();
   }
   function disconnect(instance, expectedEpoch, reason) {
     if (expectedEpoch !== undefined && expectedEpoch !== instance.epoch) return Promise.resolve();
     const transport = instance.transport, handle = instance.handle;
     instance.epoch++; instance.connected = false; instance.transport = null; instance.handle = null; instance.context = null; clear(instance); rejectAll(instance, reason || "E64 disconnected");
-    if (instance.config && instance.config.mintTokens && !instance.config.staticToken) instance.config.token = "";
+    if (instance.config && instance.config.mintTokens && !instance.config.staticToken) { instance.config.token = ""; instance.tokenSource = "none"; }
     return transport && handle ? transport.close(handle).catch(() => {}) : Promise.resolve();
   }
   async function connect(instance, context) {
@@ -240,7 +250,7 @@ function createPlugin(host) {
     instance.context = context; instance.transport = transport; instance.observations = {}; instance.lastObservationAt = null;
     try {
       if (!instance.config.token && instance.config.mintTokens) {
-        instance.config.token = await mintToken(instance.config);
+        instance.config.token = await mintToken(instance);
       }
       const opened = await transport.open({kind: "websocket", url: url(instance.config)});
       if (epoch !== instance.epoch) { await transport.close(opened.handle).catch(() => {}); return; }
@@ -276,8 +286,14 @@ function createPlugin(host) {
       const instance = Array.from(instances.values()).find((candidate) => candidate.deviceId === id);
       if (!instance) return {status: 404, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unknown instance"})};
       const read = request.query.read;
-      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "logs") return {status: 400, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unsupported read"})};
+      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "logs" && read !== "connection") return {status: 400, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unsupported read"})};
       const operation = read === undefined ? null : read;
+      if (operation === "connection") {
+        const connection = {connected: instance.connected, tokenSource: instance.tokenSource,
+          lastMintAt: instance.lastMintAt, lastMintError: instance.lastMintError,
+          staticToken: Boolean(instance.config.staticToken), mintTokens: Boolean(instance.config.mintTokens)};
+        return Promise.resolve({status: 200, headers: {"Content-Type": "application/json"}, body: JSON.stringify(connection)});
+      }
       const headers = (live) => ({"Content-Type": "application/json", "X-E64-Observation-State": live ? "live" : (instance.lastObservationAt ? "last-known" : "none"), ...(instance.lastObservationAt ? {"X-E64-Observation-Time": instance.lastObservationAt} : {})});
       return (operation ? requestRead(instance, operation) : Promise.resolve(instance.observations)).then((data) => ({status: 200, headers: headers(Boolean(operation)), body: JSON.stringify(data)}), () => ({status: 503, headers: headers(false), body: JSON.stringify({error: "E64 unavailable"})}));
     }
