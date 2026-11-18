@@ -83,6 +83,11 @@ The E64 should begin polling `/api/v2/mako`. No brew starts automatically.
 The plugin requires the `events.machine` permission to receive
 `stateUpdate` events.
 
+`MA_TYPE` and `MA_SN` are placeholders (`Xenia`, `DECAID-XENIA`). The first
+live run should confirm the E64 accepts them; if it rejects the identity,
+adjust to the value recovered from the real Xenia `/api/v2/machine/type` route
+or the scanner probe expectations.
+
 ## Safety and limits
 
 - `POST /api/v2/scripts/execute` is **acknowledged only**:
