@@ -1,7 +1,7 @@
 # Live validation — 2026-11-18
 
-Status: **transport-only live check. The plugin's state and observation
-contract was not exercised on physical hardware.**
+Status: **read-only live runtime check. The shipped plugin published the
+expected state; no action was sent.**
 
 A reachable E64 WS at `https://192.168.200.103/index.php` was probed read-only
 to test whether this plugin's assumptions could be promoted from static/QEMU
@@ -20,41 +20,71 @@ evidence to a physical capture.
 | Unknown type/action | close `1001`, reason `Connection closed` |
 | Non-JSON text | ignored; the socket stays open |
 | Historical DD range | the read-only database export's `grind_log.grind_ddd` values are 854–998, consistent with treating the raw coordinate as opaque rather than a 0–100 display value |
+| `RequestDriverState` | `ddValueDum=854`, `ddSensorFailed=false`, `grindState="Idle"`, `overshootWeightGr=0.53696`, `fan1TachoRpm=0`, `fan1Duty=-1`, `ntc2Failed=true`, `setupWizardState="Completed"` |
+| `RequestDriverConfig` | the documented field set is present; this unit's load-cell coefficients are `C0=2393.920401128173`, `C1=-0.07834534628643058` (per-device, not the fixture values) |
+| `RequestNachineInfo` | returns `grinderType="E64 WS"` and a session id |
+| Shipping plugin runtime | loaded in a Node WebSocket harness, published `{"state":"idle","observedSetting":"854 ddValueDum"}`, diagnostics 200 |
+| Dev-only reads | `RequestLogMessages`, `RequestAdcConfig` and `RequestConfigManagerSettings` close `1001`, `Connection closed` |
+
+The live state response means the plugin's observation rule would publish
+`{"state":"idle","observedSetting":"854 ddValueDum"}`. The plugin itself was not
+run, but the input contract it consumes is now confirmed on hardware.
 
 The close frame is the exact live behavior the plugin's host transport surfaces
 as a disconnect. `plugin.js` maps any `close` event to `E64 connection closed`
 and calls `reportDisconnected()`; that path is consistent with the observed
 frame, but the host transport, not the plugin, decodes the code/reason.
 
+## Live plugin run
+
+The shipped `plugin.js` was loaded in a Node VM with a WebSocket transport and
+a fresh read-only token (`pollMs: 0`). It connected to
+`wss://192.168.200.103:9997/` and published:
+
+```json
+{"state":"idle","observedSetting":"854 ddValueDum"}
+```
+
+The diagnostics reads `machineInfo` and `config` returned HTTP 200 with the
+live responses. No `GrinderAction` was sent and `reportDisconnected` stayed
+false.
+
+The harness disabled TLS verification for the self-signed device certificate
+(`NODE_TLS_REJECT_UNAUTHORIZED=0`), so this run does not validate the host's
+trust-store path; the existing host TLS tests cover that boundary. The Decaid
+host transport itself was not used — this was a Node WebSocket harness around
+the shipped plugin.
+
 The database export does not contain a live `RequestDriverState` response. The
 `grind_log.grind_ddd` range is supporting context for the "opaque ddValueDum"
-decision, not a substitute for the missing state capture.
+decision, not a substitute for the state capture. The live state response above
+is the physical counterpart.
 
 ## What was not confirmed
 
-The plugin needs a WSS bearer token in `TokensJson`. No usable token could be
-minted without changing the device:
+- The normal no-password UI path still does not deliver a token. The live token
+  was minted through the documented login-construction test (SELECT-only; no
+  database row written), not through `login.php` or `rest_api/login` with an
+  empty password.
+- The Decaid host transport and the platform trust-store path were not
+  exercised; the run used a Node WebSocket harness with TLS verification
+  disabled. The plugin's state/diagnostics logic was executed and published the
+  expected observation.
+- The calibration/units/physical meaning of `ddValueDum` remain open; issue #9
+  stays open.
+- `AddBrewEvent` and all actions were not sent.
+- `hasNtc1=false` coexists with a valid NTC1 at 34.32 °C, so it must not be used
+  as an NTC1-presence flag.
+- The CPU temperature reported `-88.59 °C` with `cpuTempFailed=false`; this is
+  recorded as an anomaly.
 
-- `GET /login.php` auto-creates an Owner session because the
-  `Role.Owner.LoginData` row is present and empty.
-- `POST /rest_api/login` with `{"userRole":"Owner","password":""}` returns
-  HTTP 400 `Wrong password!` on the same unit.
-- The `login.php` response header is the literal
-  `Authorization: Bearer $sessionToken` (single-quoted PHP string), so the UI
-  path does not deliver a token either.
+## Token lifetime and reconnect
 
-No password was guessed, no password was set, and no token was obtained.
-Consequently:
-
-- `RequestDriverState` was never executed with a valid token;
-- `ddValueDum`, `ddSensorFailed`, `grindState`, `fan1TachoRpm`, `ntc1*`,
-  `ntc2*` and the diagnostics payloads remain uncaptured on physical hardware;
-- the "501 ddValueDum" observation rule and the `fan1TachoRpm` non-RPM caveat
-  remain static/QEMU claims, not physical measurements;
-- issue #9 remains open.
-
-This matches the repository's existing boundary: the VM integration is real,
-but it is not a physical capture.
+The live token was **single-connection**: the first socket served the three
+always-on reads, a second socket with the same token closed `1001`, and a
+freshly minted token worked. The plugin reuses `TokensJson[id]` on reconnect, so
+a real deployment needs a token-refresh mechanism or a connection that stays up.
+This matches the existing follow-up in the research `todo.md`.
 
 ## Safe next step
 
