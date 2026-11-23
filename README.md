@@ -174,8 +174,8 @@ The repository and release ZIP keep `manifest.json` and `plugin.js` at their
 package root, as required by Decaid's plugin package resolver.
 
 CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
-and GitHub source archive against upstream Decaid `main` using Flutter 3.50.0
-(Dart 3.14); the Linux app smoke pins upstream main `1d74fbf7` with Flutter 3.47.9,
+and GitHub source archive against upstream Decaid `main` using Flutter 3.47.9,
+the version Decaid's own CI pins; the Linux app smoke pins upstream main `1d74fbf7` with Flutter 3.47.9,
 the first pinned host that accepts the `notifications` permission.
 
 ## Simulator end-to-end tests

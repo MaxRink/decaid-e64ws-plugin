@@ -13,9 +13,13 @@ trap 'rm -rf "$scratch"' EXIT
 
 request() {
   local method=$1 path=$2 expected=$3 data=${4-} status
+  printf '  [smoke] %s %s\n' "$method" "$path"
   local args=(--silent --show-error --max-time 20 -X "$method" -o "$scratch/response" -w '%{http_code}')
   if [[ -n "$data" ]]; then args+=(-H 'content-type: application/json' --data "$data"); fi
-  status=$(curl "${args[@]}" "$base$path")
+  if ! status=$(curl "${args[@]}" "$base$path"); then
+    printf 'FAIL: %s %s did not answer\n' "$method" "$path" >&2
+    return 1
+  fi
   if [[ ! "$status" =~ ^($expected)$ ]]; then
     printf 'FAIL: %s %s returned %s (expected %s)\n' "$method" "$path" "$status" "$expected" >&2
     cat "$scratch/response" >&2
