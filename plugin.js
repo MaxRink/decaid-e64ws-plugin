@@ -954,8 +954,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       const mineAll = list.filter(owned).sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
       const mine = mineAll[0];
       inventory.duplicates = Math.max(0, mineAll.length - 1);
-      const extras = (record) => ({...(record && record.extras && typeof record.extras === "object" ? record.extras : {}),
-        source: PLUGIN_ID, instanceId: config.id, unit: "µm (grinder display)", deviceId: instance.deviceId, lastSeenAt: new Date().toISOString()});
+      const own = () => ({source: PLUGIN_ID, instanceId: config.id, unit: "µm (grinder display)", deviceId: instance.deviceId, lastSeenAt: new Date().toISOString()});
       let record;
       if (mine) {
         if (mine.archived === true) {
@@ -964,13 +963,13 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
         }
         const seen = Date.parse(mine.extras.lastSeenAt);
         record = !Number.isFinite(seen) || Date.now() - seen >= DAY_MS || mine.extras.deviceId !== instance.deviceId
-          ? await api("PUT", "/api/v1/grinders/" + encodeURIComponent(mine.id), {extras: extras(mine)}) : mine;
+          ? await writeOwnExtras(mine.id, own()) : mine;
         inventory.status = "linked";
       } else {
         const adoptable = list.find((g) => g && g.archived !== true && typeof g.model === "string" && /E64/i.test(g.model) &&
           !(g.extras && typeof g.extras === "object" && g.extras.source));
         if (adoptable) {
-          record = await api("PUT", "/api/v1/grinders/" + encodeURIComponent(adoptable.id), {extras: extras(adoptable)});
+          record = await writeOwnExtras(adoptable.id, own());
           inventory.status = "adopted";
         } else {
           let grinderType = null;
@@ -978,7 +977,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
           if (epoch !== instance.epoch) return;
           const known = typeof grinderType === "string" && /^E64\b/i.test(grinderType) ? "Mahlkönig " + grinderType : null;
           record = await api("POST", "/api/v1/grinders", {model: known || inventory.model || "Mahlkönig E64 WS", burrs: "64 mm flat (stock)",
-            burrSize: 64, burrType: "flat", settingType: "numeric", settingSmallStep: 1, settingBigStep: 10, extras: extras(null)});
+            burrSize: 64, burrType: "flat", settingType: "numeric", settingSmallStep: 1, settingBigStep: 10, extras: own()});
           inventory.status = "created";
         }
       }
@@ -988,6 +987,25 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       Object.assign(inventory, {status: "error", lastError: error && /HTTP|returned/.test(error.message) ? error.message : "inventory request failed"});
     } finally {
       inventory.syncing = false;
+    }
+  }
+  // Decaid's grinder PUT replaces `extras` wholesale and has no precondition, and
+  // other plugins (assisted dial-in) keep their own keys there. So: read the record
+  // right before writing, change only this plugin's keys, read back, and retry
+  // (3 attempts, with jitter) if ours did not land or another writer's key vanished.
+  const OWN_EXTRAS = ["source", "instanceId", "unit", "deviceId", "lastSeenAt"];
+  async function writeOwnExtras(id, own) {
+    const path = "/api/v1/grinders/" + encodeURIComponent(id);
+    const extrasOf = (record) => record && record.extras && typeof record.extras === "object" && !Array.isArray(record.extras) ? record.extras : {};
+    for (let attempt = 1; ; attempt++) {
+      const before = extrasOf(await api("GET", path));
+      const others = Object.keys(before).filter((key) => !OWN_EXTRAS.includes(key));
+      await api("PUT", path, {extras: {...before, ...own}});
+      const after = await api("GET", path), stored = extrasOf(after);
+      const landed = OWN_EXTRAS.every((key) => JSON.stringify(stored[key]) === JSON.stringify(own[key]));
+      if (landed && others.every((key) => Object.prototype.hasOwnProperty.call(stored, key))) return after;
+      if (attempt >= 3) throw new Error("/api/v1/grinders write conflict HTTP 409");
+      await new Promise((resolve) => setTimeout(resolve, 100 * attempt + Math.floor(Math.random() * 200)));
     }
   }
   // Fill the workflow's grinder only when it names none; other fields are untouched

@@ -963,6 +963,12 @@ async function inventoryRun({decaid = decaidApi(), extra = {}, grinderType = 'E6
       }
     }
   }
+  // Retries wait 100-500 ms between attempts; let the sync finish.
+  for (const deadline = Date.now() + 3000; Date.now() < deadline;) {
+    const current = await read();
+    if (current.lastSyncAt !== null || ['error', 'archived', 'disabled'].includes(current.status)) break;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
   const inventory = await read();
   await loaded.plugin.onUnload();
   return {decaid, inventory, writes: decaid.calls.filter((call) => call.method !== 'GET')};
@@ -1210,4 +1216,54 @@ test('diagnostics render as an HTML page for ui=1 and stay JSON otherwise', asyn
   const json = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query});
   assert.equal(json.headers['Content-Type'], 'application/json');
   await loaded.plugin.onUnload();
+});
+
+test('grinder extras writes keep a concurrent dial-in key and retry a clobbered write', async () => {
+  const dialin = {model: 'stats', samples: 12};
+  const stale = () => ({id: 'mine', model: 'Mahlkönig E64 WS', archived: false, createdAt: '2026-11-20T10:00:00Z',
+    extras: {source: 'mahlkoenig-e64.reaplugin', instanceId: 'one', deviceId: 'old-device', lastSeenAt: '2020-01-01T00:00:00.000Z'}});
+  // Dial-in writes its key after E64 listed the grinders but before E64's PUT.
+  const racing = decaidApi({grinders: [stale()]});
+  const handle = racing.handle;
+  racing.handle = (method, path, body) => {
+    const result = handle(method, path, body);
+    const copy = {status: result.status, value: JSON.parse(JSON.stringify(result.value))};
+    if (method === 'GET' && path.startsWith('/api/v1/grinders?')) racing.grinders[0].extras['assisted-dialin.reaplugin'] = dialin;
+    return copy;
+  };
+  const kept = await inventoryRun({decaid: racing});
+  assert.deepEqual(racing.grinders[0].extras['assisted-dialin.reaplugin'], dialin);
+  assert.equal(racing.grinders[0].extras.deviceId, 'plugin:mahlkoenig-e64.reaplugin:e64:one');
+  assert.equal(kept.inventory.status, 'linked');
+  const put = racing.calls.find((call) => call.method === 'PUT' && call.path === '/api/v1/grinders/mine');
+  const order = racing.calls.map((call) => `${call.method} ${call.path}`);
+  assert.equal(order[order.indexOf('PUT /api/v1/grinders/mine') - 1], 'GET /api/v1/grinders/mine', 'a fresh read right before the PUT');
+  assert.deepEqual(Object.keys(put.body), ['extras']);
+
+  // Another writer replaces extras wholesale right after E64's first PUT: E64 notices and writes again.
+  const clobbered = decaidApi({grinders: [stale()]});
+  const inner = clobbered.handle;
+  let puts = 0;
+  clobbered.handle = (method, path, body) => {
+    const result = inner(method, path, body);
+    if (method === 'PUT' && path === '/api/v1/grinders/mine' && ++puts === 1) clobbered.grinders[0].extras = {'assisted-dialin.reaplugin': dialin};
+    return result;
+  };
+  const retried = await inventoryRun({decaid: clobbered});
+  assert.equal(puts, 2);
+  assert.deepEqual(clobbered.grinders[0].extras['assisted-dialin.reaplugin'], dialin);
+  assert.equal(clobbered.grinders[0].extras.source, 'mahlkoenig-e64.reaplugin');
+  assert.equal(retried.inventory.status, 'linked');
+
+  // A writer that always wins: three attempts, then an error, and the other key is still there.
+  const hostile = decaidApi({grinders: [stale()]});
+  const base = hostile.handle;
+  hostile.handle = (method, path, body) => {
+    const result = base(method, path, body);
+    if (method === 'PUT' && path === '/api/v1/grinders/mine') hostile.grinders[0].extras = {'assisted-dialin.reaplugin': dialin};
+    return result;
+  };
+  const failed = await inventoryRun({decaid: hostile});
+  assert.equal(hostile.calls.filter((call) => call.method === 'PUT').length, 3);
+  assert.deepEqual([failed.inventory.status, failed.inventory.lastError], ['error', '/api/v1/grinders write conflict HTTP 409']);
 });

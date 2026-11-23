@@ -3,7 +3,7 @@
   "name": "Mahlkönig E64",
   "author": "Decaid contributors",
   "description": "Read-only Mahlkönig E64 grinder telemetry over WebSocket.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "apiVersion": 1,
   "permissions": [
     "api",

@@ -420,3 +420,23 @@ test('a full setup-assistant run against the simulator ends connected', (t) => {
     assert.deepEqual([status.needsSetup, status.instances[0].connected, status.instances[0].debugMode], [false, true, 'available']);
   });
 });
+
+test('a dial-in key written while E64 refreshes the grinder record survives', (t) => withSim(t, {devGate: 'locked'}, async (sim, keep) => {
+  const dialin = {plan: {setting: '82'}, history: [1, 2, 3]};
+  const decaid = decaidApi({grinders: [{id: 'e64-record', model: 'Mahlkönig E64 WS', archived: false, createdAt: '2026-11-20T10:00:00Z', burrs: '64 mm flat (stock)',
+    extras: {source: 'mahlkoenig-e64.reaplugin', instanceId: 'sim', deviceId: 'previous-device', lastSeenAt: '2020-01-01T00:00:00.000Z'}}]});
+  const handle = decaid.handle;
+  decaid.handle = (method, path, body) => {
+    const result = handle(method, path, body);
+    const copy = {status: result.status, value: JSON.parse(JSON.stringify(result.value))};
+    // Assisted dial-in stores its per-grinder data just after E64 listed the grinders.
+    if (method === 'GET' && path.startsWith('/api/v1/grinders?')) decaid.grinders[0].extras['assisted-dialin.reaplugin'] = dialin;
+    return copy;
+  };
+  const {session} = keep(await loadPlugin({InstancesJson: instance(sim, {scheme: 'ws'}), TokensJson: token(sim.token)}, {decaid}));
+  await session.connect();
+  await until(async () => (await session.diagnostics('inventory')).body.lastSyncAt !== null, 'inventory sync');
+  const {extras} = decaid.grinders[0];
+  assert.deepEqual(extras['assisted-dialin.reaplugin'], dialin);
+  assert.deepEqual([extras.source, extras.instanceId, extras.deviceId], ['mahlkoenig-e64.reaplugin', 'sim', 'plugin:mahlkoenig-e64.reaplugin:e64:sim']);
+}));
