@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import zlib from 'node:zlib';
+import crypto from 'node:crypto';
 
 const source = fs.readFileSync(new URL('../plugin.js', import.meta.url), 'utf8');
 function load(settings, fixture, timers = {}, fetchImpl = null) {
@@ -577,7 +579,7 @@ test('unknown endpoints are 404 and the manifest holds only used permissions', a
   const loaded = await load({}, {sent: [], events: []});
   assert.equal(loaded.plugin.handleHttpRequest({endpoint: 'nope', method: 'GET', query: {}}).status, 404);
   const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
-  assert.deepEqual(manifest.permissions, ['api', 'network.websocket', 'events.machine', 'notifications']);
+  assert.deepEqual(manifest.permissions, ['api', 'network.websocket', 'events.machine', 'events.shots', 'notifications']);
   for (const key of ['MintTokens', 'AllowNoPasswordWorkaround']) assert.deepEqual([manifest.settings[key].type, manifest.settings[key].values, manifest.settings[key].default], ['enum', ['false', 'true'], 'false']);
   assert.equal(/host\.log/.test(source), false);
 });
@@ -682,5 +684,170 @@ test('every event the plugin handles is covered by a declared permission', async
   const loaded = await load({}, {sent: [], events: []});
   loaded.plugin.onEvent({name: 'workflowUpdated', payload: {}});
   loaded.plugin.onEvent({name: 'notificationResult', payload: {requestId: 'r', status: 'accepted'}});
+  await loaded.plugin.onUnload();
+});
+
+test('the plugin can only ever send allowlisted grinder actions', async () => {
+  const allowed = ['StartGrindGbw', 'Stop', 'SetAgsaTargetDdValue', 'AddBrewEvent', 'SetBacklightBrightness'];
+  assert.deepEqual(JSON.parse(source.match(/const ALLOWED_ACTIONS = (\[[^\]]*\]);/)[1]), allowed);
+  const forbidden = ['StartGrindManual', 'StartGrindGbt', 'StartCalibration', 'CalibrateDdSensor', 'StartTara', 'SaveLog', 'ResetLog', 'SetFan1Duty', 'SetFan2Duty',
+    'SetFanTemperatureCtrlEnabled', 'CalibrateFan1', 'CalibrateFan2', 'ToggleBacklightPower', 'EspFlashApp', 'EspEraseFlash', 'EspReset', 'ResetDriverConfig',
+    'StopAgsa', 'GbsCreateReport', 'SetLanguage', 'SetSetupWizardState', 'StartEnduranceTest', 'StopEnduranceTest', 'NozzleLightRunStandby', 'NozzleLightStop',
+    'UpdateDriverConfig', 'UpdateCpuConfig', 'WifiStaConfig', 'WifiConfigChanged', 'CustomSignal1', 'CustomSignal2', 'RequestOnboarding', 'RequestAdcConfig',
+    'RequestConfigManagerSettings'];
+  for (const name of forbidden) assert.equal(source.includes(name), false, name);
+  assert.equal(/"Rc[A-Z]/.test(source), false, 'no remote-control input injection');
+  for (const literal of source.matchAll(/action\(instance, "([A-Za-z]+)"/g)) assert.ok(allowed.includes(literal[1]), literal[1]);
+});
+
+test('control settings are validated and default to read-only', async () => {
+  const base = {InstancesJson: one('127.0.0.1'), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}})};
+  await assert.rejects(async () => load({...base, AdjustmentOwner: 'everyone'}, {sent: [], events: []}), /AdjustmentOwner must be/);
+  await assert.rejects(async () => load({...base, AllowControl: 'yes'}, {sent: [], events: []}), /invalid JSON|must be true or false/);
+  const loaded = await load(base, {sent: [], events: []});
+  assert.equal(loaded.registrations[0].definition.driverId, 'e64');
+  assert.equal(loaded.registrations[0].handlers.start, undefined);
+  const control = JSON.parse((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'control'}})).body);
+  assert.deepEqual([control.allowControl, control.debugMode, control.owner], [false, 'disabled', 'off']);
+  await loaded.plugin.onUnload();
+  const statics = await load({...base, AllowControl: 'true'}, {sent: [], events: []});
+  assert.equal(statics.registrations[0].definition.driverId, 'e64', 'a static single-connection token is never spent on a probe');
+  await statics.plugin.onUnload();
+});
+
+test('completed grinds become grind events without a uuid', async () => {
+  const pending = new Map(); let nextTimer = 0;
+  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay}); return id;}, clearTimeout: id => pending.delete(id)};
+  const fixture = {sent: [], events: []};
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}})}, fixture, timers);
+  const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
+  await new Promise(resolve => setImmediate(resolve));
+  answer(fixture, 0, {grindState: 'Grind', ddValueDum: 819, ddSensorFailed: false});
+  await connected;
+  const states = [{grindState: 'GbwPostGrind', ddValueDum: 819, ddSensorFailed: false},
+    {grindState: 'Idle', ddValueDum: 819, ddSensorFailed: false, grindTargetWeightGr: 18, grindResultWeightGr: 18.07, motorRunTimeMs: 8300, sessionId: 'secret'}];
+  for (const [index, state] of states.entries()) {
+    const poll = [...pending.entries()].find(([, timer]) => timer.delay === 100);
+    pending.delete(poll[0]); poll[1].callback();
+    answer(fixture, index + 1, state);
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
+  const events = JSON.parse(loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}).body).events;
+  assert.equal(events.length, 1);
+  assert.deepEqual({...events[0], completedAt: typeof events[0].completedAt},
+    {grindUuid: null, completedAt: 'string', targetWeightGr: 18, resultWeightGr: 18.07, motorRunTimeMs: 8300, setting: '82', linkedShotId: null});
+  const diagnostics = JSON.parse((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query})).body);
+  assert.equal(diagnostics.grindEvents.length, 1);
+  assert.equal(JSON.stringify(diagnostics).includes('secret'), false);
+  await loaded.plugin.onUnload();
+});
+
+const plain = (value) => JSON.parse(JSON.stringify(value));
+const codec = async () => (await load({}, {sent: [], events: []})).plugin.codec;
+function zipOf(entries) {
+  const locals = [], centrals = [];
+  let offset = 0;
+  for (const {name, data, method} of entries) {
+    const raw = Buffer.from(data), body = method === 8 ? zlib.deflateRawSync(raw) : raw, fileName = Buffer.from(name);
+    const fields = (signature, size) => { const b = Buffer.alloc(size); b.writeUInt32LE(signature, 0); return b; };
+    const local = fields(0x04034b50, 30);
+    local.writeUInt16LE(20, 4); local.writeUInt16LE(method, 8); local.writeUInt32LE(zlib.crc32(raw), 14);
+    local.writeUInt32LE(body.length, 18); local.writeUInt32LE(raw.length, 22); local.writeUInt16LE(fileName.length, 26);
+    const central = fields(0x02014b50, 46);
+    central.writeUInt16LE(20, 6); central.writeUInt16LE(method, 10); central.writeUInt32LE(zlib.crc32(raw), 16);
+    central.writeUInt32LE(body.length, 20); central.writeUInt32LE(raw.length, 24); central.writeUInt16LE(fileName.length, 28); central.writeUInt32LE(offset, 42);
+    locals.push(local, fileName, body); centrals.push(central, fileName);
+    offset += local.length + fileName.length + body.length;
+  }
+  const directory = Buffer.concat(centrals), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(directory.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, directory, end]);
+}
+
+test('inflate matches zlib for stored, fixed and dynamic blocks', async () => {
+  const {inflate} = await codec();
+  let seed = 7;
+  const random = (n) => Buffer.from(Array.from({length: n}, () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) & 255));
+  const csvLike = Buffer.from(Array.from({length: 4000}, (_, i) => `${i},${crypto.randomUUID()},2026-11-23 10:${String(i % 60).padStart(2, '0')}:00,1,18000,"Espresso, double",500\n`).join(''));
+  const samples = [Buffer.alloc(0), Buffer.from('a'), random(1), random(70000), Buffer.alloc(100000, 65), csvLike, Buffer.concat([random(40000), random(40000)])];
+  for (const raw of samples) {
+    for (const options of [{level: 0}, {strategy: zlib.constants.Z_FIXED}, {level: 9}, {level: 1}]) {
+      const packed = zlib.deflateRawSync(raw, options);
+      assert.deepEqual(Buffer.from(inflate(new Uint8Array(packed), 1 << 24)), raw, `${raw.length} bytes ${JSON.stringify(options)}`);
+    }
+  }
+  assert.throws(() => inflate(new Uint8Array(zlib.deflateRawSync(Buffer.alloc(5000, 1))), 1000), /exceeds limit/);
+  assert.throws(() => inflate(new Uint8Array([0xff, 0xff]), 1000), /inflate/);
+  assert.throws(() => inflate(new Uint8Array(zlib.deflateRawSync(csvLike)).subarray(0, 200), 1 << 24), /truncated/);
+});
+
+test('zip reader extracts stored and deflated entries and enforces limits', async () => {
+  const {readZip, fromBase64, utf8} = await codec();
+  const text = 'grind_id,recipe_type\n1,"Müller, café ☕"\n';
+  const zip = zipOf([{name: 'HemroE64WSServiceLogs_SN1_x.csv', data: 'a,b\n', method: 0},
+    {name: 'HemroE64WSGrindLogs_SN1_x.csv', data: text, method: 8}, {name: 'plain.txt', data: 'stored', method: 0}]);
+  const bytes = fromBase64(zip.toString('base64'));
+  assert.deepEqual(Buffer.from(bytes), zip);
+  assert.equal(utf8(readZip(bytes, (name) => /GrindLogs.*\.csv$/.test(name), 1 << 20)), text);
+  assert.equal(utf8(readZip(bytes, (name) => name === 'plain.txt', 1 << 20)), 'stored');
+  assert.equal(readZip(bytes, () => false, 1 << 20), null);
+  assert.throws(() => readZip(bytes, (name) => name === 'plain.txt', 3), /exceeds limit/);
+  assert.throws(() => readZip(new Uint8Array(30), () => true, 100), /no end of central directory/);
+});
+
+test('csv parser handles quotes, escaped quotes, CRLF and semicolons', async () => {
+  const {parseCsv} = await codec();
+  assert.deepEqual(plain(parseCsv('a,b,c\r\n1,"x, ""y""",\n2,"multi\nline",z')), [['a', 'b', 'c'], ['1', 'x, "y"', ''], ['2', 'multi\nline', 'z']]);
+  assert.deepEqual(plain(parseCsv('﻿a;b\n1;2\n')), [['a', 'b'], ['1', '2']]);
+});
+
+test('a completed grind downloads the grind log and attaches the matching row', async () => {
+  const pending = new Map(); let nextTimer = 0;
+  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay}); return id;}, clearTimeout: id => pending.delete(id)};
+  const stamp = (offsetMin) => { const d = new Date(Date.now() + offsetMin * 60000), p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+  const header = 'grind_id,grind_uuid,grind_date_time,grind_ddd,grind_duration,grind_weight,grind_successfull,recipe_index,recipe_uuid,recipe_mode,recipe_amount,recipe_type,recipe_coarseness,recipe_brew_time,recipe_brew_weight';
+  const csv = [header, `3,uuid-other-dose,${stamp(0)},820,8000,20100,1,2,r2,GbW,20000,Lungo,600,30000,40000`,
+    `2,uuid-match,${stamp(0)},819,8300,18070,1,1,r1,GbW,18000,"Espresso, double",500,27000,36000`,
+    `1,uuid-too-old,${stamp(-60)},819,8300,18000,1,1,r1,GbW,18000,Espresso,500,27000,36000`].join('\n');
+  const zip = zipOf([{name: 'HemroE64WSGrindLogs_SN1_x.csv', data: csv, method: 8}]);
+  const calls = [];
+  let binary = true;
+  const fetchImpl = async (url, init) => {
+    calls.push({url, init});
+    if (url.endsWith('/login')) return {ok: true, status: 200, headers: {get: (name) => name === 'authorization' ? 'Bearer t' : 'PHPSESSID=abc; path=/'}, text: async () => ''};
+    return {ok: true, status: 200, headers: {get: () => null}, text: async () => '', ...(binary ? {base64: async () => zip.toString('base64')} : {})};
+  };
+  const fixture = {sent: [], events: []};
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100, restPort: 8443}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})}, fixture, timers, fetchImpl);
+  const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
+  await new Promise(resolve => setImmediate(resolve));
+  answer(fixture, 0, {grindState: 'Grind', ddValueDum: 819, ddSensorFailed: false});
+  await connected;
+  const grind = async (index) => {
+    const poll = [...pending.entries()].find(([, timer]) => timer.delay === 100);
+    pending.delete(poll[0]); poll[1].callback();
+    answer(fixture, index, {grindState: index % 2 ? 'Idle' : 'Grind', ddValueDum: 819, ddSensorFailed: false, grindTargetWeightGr: 18});
+    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+  };
+  await grind(1);
+  const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
+  const body = () => JSON.parse(loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}).body);
+  const download = calls.find((call) => call.url.endsWith('/download_machine_logs'));
+  assert.equal(download.url, 'https://127.0.0.1:8443/rest_api/download_machine_logs');
+  assert.deepEqual([download.init.method, download.init.responseType, download.init.headers.Cookie], ['POST', 'base64', 'PHPSESSID=abc']);
+  const [event] = body().events;
+  assert.equal(event.grindUuid, 'uuid-match', 'the target weight rules out the newer 20 g row');
+  assert.deepEqual(event.recipe, {index: 1, uuid: 'r1', mode: 'GbW', type: 'Espresso, double', amountGr: 18, setting: '50', brewTimeMs: 27000, brewWeightGr: 36});
+  assert.deepEqual(event.log, {grindWeightGr: 18.07, grindDurationMs: 8300, setting: '82', successful: true});
+  assert.equal(body().log.status, 'ok');
+  binary = false;
+  await grind(2); await grind(3);
+  assert.equal(body().log.status, 'unsupported-host');
+  const downloads = calls.filter((call) => call.url.endsWith('/download_machine_logs')).length;
+  await grind(4); await grind(5);
+  assert.equal(calls.filter((call) => call.url.endsWith('/download_machine_logs')).length, downloads, 'an older host is not asked again');
   await loaded.plugin.onUnload();
 });

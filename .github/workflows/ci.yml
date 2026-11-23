@@ -256,7 +256,7 @@ jobs:
         with:
           repository: MaxRink/decaid
           # Private fork head (sync/upstream-20261123) with opt-in TLS pinning, which upstream main lacks.
-          ref: 314498021899c734227931dd34001590cabd34e5
+          ref: a0dede246cd5a65601bf24bc79b77d5778b78fc6
           ssh-key: ${{ secrets.DECAID_FORK_SSH_KEY }}
           persist-credentials: false
           path: decaid

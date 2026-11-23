@@ -2,16 +2,17 @@
 
 [![CI](https://github.com/MaxRink/decaid-e64ws-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/MaxRink/decaid-e64ws-plugin/actions/workflows/ci.yml)
 
-Read-only external `type: grinder` plugin for E64 devices exposing the local
-WebSocket protocol. It is based on the closed Decaid #848 implementation and
+External `type: grinder` plugin for E64 devices exposing the local WebSocket
+protocol. It is read-only by default; optional control needs a grinder running
+an owner-enabled development image (see [Grinder control](#grinder-control)). It is based on the closed Decaid #848 implementation and
 uses the current runtime-v2 Grinder contract.
 
 The plugin registers an independent Grinder device for each configured instance. It
 publishes the generic Grinder state (`idle`, `grinding`, `error`, or
 `unknown`) and a read-only setting observation; an allowlisted subset of the
 vendor `RequestDriverState`, `RequestDriverConfig` and `RequestNachineInfo`
-replies is available through the diagnostics surface. There are no motor, grind-setting, RPM, calibration, or
-GBS writes. Configure `InstancesJson` and secure `TokensJson` in the plugin
+replies is available through the diagnostics surface. Without `AllowControl`
+there are no motor, grind-setting, RPM, calibration or GBS writes. Configure `InstancesJson` and secure `TokensJson` in the plugin
 settings. For automatic token minting, also set `MintTokens` to `true` and put
 the current Owner password in the secure `PasswordsJson`; `TokensJson` entries
 may then be empty. The gated `AllowNoPasswordWorkaround` setting can use the
@@ -82,6 +83,45 @@ and ran the plugin through a WebSocket harness, not Decaid's host transport.
 Multiple instances have independent sockets and protocol state, but Decaid
 currently selects one connected Grinder for workflows.
 
+## Grind events
+
+When the grinder's state leaves the grind cycle (`Grind`, `GbwPostGrind` and the
+manual and timed start states) the plugin records a grind event: completion time
+as observed by the plugin, target and result weight, motor run time and the
+displayed setting. The latest 20 per instance are returned by
+`GET /api/v1/plugins/mahlkoenig-e64.reaplugin/grind-events?deviceId=<deviceId>`
+and appear as `grindEvents` in the default diagnostics view, with no serial
+number or session ID.
+
+With `MintTokens`, each completed grind also triggers one Owner-session
+`POST /rest_api/download_machine_logs` (pinned, on `restPort`). The plugin reads
+the `GrindLogs` CSV from the ZIP with its own ZIP, DEFLATE and CSV reader, takes
+the newest unused row whose `recipe_amount` matches the observed target (±0.5 g)
+and whose `grind_date_time` is within 10 minutes of the observed completion,
+and adds `grindUuid`, a `log` block (grind weight, duration, displayed setting
+from `grind_ddd`, success) and a `recipe` block (index, UUID, mode, type, dose,
+displayed coarseness, brew time and weight). Weights are read in the firmware's
+10⁻³ g encoding. A failed download backs off like a failed login (5 s doubling
+to 5 min); the grind-events response reports the status under `log`. This needs
+a Decaid host whose plugin `fetch` supports `responseType: "base64"` and
+`response.base64()`. On older hosts the plugin detects the missing method once,
+marks the log `unsupported-host` and keeps `grindUuid` `null`.
+
+## Grinder control
+
+Control is off by default and needs `AllowControl` `"true"`, `MintTokens`, and a
+grinder running a development image that its owner has enabled. The plugin
+probes this once per load on a separate connection and registers start/stop and
+grind-setting control only when the grinder accepts it; a locked grinder stays
+read-only. `AdjustmentOwner` (`off`, `grinder` or `decaid`) decides who adjusts
+the grind: `decaid` allows grind-setting writes from Decaid, while `grinder` sends
+finished Decaid shots to the grinder's grind-by-sync as brew events.
+`SyncBacklight` switches the grinder backlight off while the espresso machine
+sleeps. `GET <diagnostics>?read=control` reports the probe result and the last
+actions. Behaviour, limits and risks are described in
+[docs/DEBUG_MODE.md](docs/DEBUG_MODE.md); this repository contains no unlock
+instructions.
+
 ## Token acquisition
 
 The E64 WSS listener needs a five-minute bearer token. There are three ways to
@@ -146,7 +186,7 @@ See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
 
 ## Installation
 
-Version 0.4.4 requires a Decaid build containing the read-only Grinder observation
+Version 0.5.0 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and the plugin `notifications` permission (#1003), and tracks upstream Decaid
 `main` (verified against `1d74fbf7` on 2026-11-23), in addition to runtime-v2 and validated device
 surfaces. `certSha256` pinning needs a host with `tlsPinSha256` support; older hosts ignore it. The stable `0.8.8` release has not been
@@ -274,7 +314,7 @@ exact installed source revision before these checks count as verified evidence.
 ## Diagnostics and errors
 
 The diagnostics surface accepts `GET` with the host `deviceId`. The supported
-`read` values are none, `config`, `machineInfo`, `connection` and `xenia`.
+`read` values are none, `config`, `machineInfo`, `connection`, `control` and `xenia`.
 With no `read` parameter it returns last-known observations, including the
 latest polled `state`, which may remain available after disconnection; there is
 no separate `read=state`. Reconnecting starts a fresh observation set.

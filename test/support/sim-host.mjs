@@ -45,20 +45,21 @@ export function makeCert() {
   return {dir, cert, key, sha256};
 }
 
-export async function startSim({tlsCert, httpsCert, fw01 = false, replay, token = 'sim-ws-token', ports} = {}) {
+export async function startSim({tlsCert, httpsCert, fw01 = false, replay, devGate, token = 'sim-ws-token', ports} = {}) {
   const port = ports?.port ?? await freePort(), httpPort = ports?.httpPort ?? await freePort(), scalePort = ports?.scalePort ?? await freePort();
   const args = [simScript, '--host', '127.0.0.1', '--port', String(port), '--scale-port', String(scalePort), '--http-port', String(httpPort), '--token', token];
   if (tlsCert) args.push('--tls-cert', tlsCert.cert, '--tls-key', tlsCert.key);
   if (httpsCert) args.push('--http-tls-cert', httpsCert.cert, '--http-tls-key', httpsCert.key);
   if (fw01) args.push('--fw01-login');
   if (replay) args.push('--replay', replay);
+  if (devGate) args.push('--dev-gate', devGate);
   const child = spawn(python, ['-u', ...args], {cwd: simRoot, stdio: ['ignore', 'pipe', 'pipe']});
   let output = '';
   child.stdout.on('data', (chunk) => { output += chunk; });
   child.stderr.on('data', (chunk) => { output += chunk; });
   const sim = {child, port, httpPort, scalePort, token, https: Boolean(httpsCert), ports: {port, httpPort, scalePort},
     stop: () => new Promise((resolve) => { if (child.exitCode !== null) return resolve(); child.once('exit', resolve); child.kill('SIGTERM'); })};
-  const deadline = Date.now() + 15000;
+  const deadline = Date.now() + 30000; // a cold Python start can take well over 10 s
   while (!output.includes('E64 simulator:')) {
     if (child.exitCode !== null) throw new Error('simulator exited: ' + output);
     if (Date.now() > deadline) { await sim.stop(); throw new Error('simulator start timed out: ' + output); }
@@ -101,21 +102,34 @@ async function request(target, method, route, body, headers = {}) {
     ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`)];
   if (body !== undefined) lines.push(`Content-Length: ${Buffer.byteLength(body)}`);
   socket.end(lines.join('\r\n') + '\r\n\r\n' + (body ?? ''));
-  const raw = await new Promise((resolve, reject) => { const chunks = []; socket.on('data', (c) => chunks.push(c)); socket.on('end', () => resolve(Buffer.concat(chunks).toString())); socket.on('error', reject); });
-  const [head, ...rest] = raw.split('\r\n\r\n');
-  const [status, ...headerLines] = head.split('\r\n');
-  const parsed = Object.fromEntries(headerLines.map((line) => [line.slice(0, line.indexOf(':')).trim().toLowerCase(), line.slice(line.indexOf(':') + 1).trim()]));
-  return {status: Number(status.split(' ')[1]), headers: parsed, body: rest.join('\r\n\r\n')};
+  const raw = await new Promise((resolve, reject) => { const chunks = []; socket.on('data', (c) => chunks.push(c)); socket.on('end', () => resolve(Buffer.concat(chunks))); socket.on('error', reject); });
+  const split = raw.indexOf('\r\n\r\n');
+  const [status, ...headerLines] = raw.subarray(0, split).toString('latin1').split('\r\n');
+  const parsed = {};
+  for (const line of headerLines) {
+    const name = line.slice(0, line.indexOf(':')).trim().toLowerCase(), value = line.slice(line.indexOf(':') + 1).trim();
+    parsed[name] = parsed[name] ? parsed[name] + ', ' + value : value;
+  }
+  const bytes = raw.subarray(split + 4);
+  return {status: Number(status.split(' ')[1]), headers: parsed, bytes, body: bytes.toString('utf8')};
 }
 
-export function hostFetch(log = []) {
+// Decaid's own REST API (shots) is answered from `shots`; everything else goes to the network.
+// binary: emulate the host's opt-in fetch(url, {responseType: "base64"}) -> response.base64().
+export function hostFetch(log = [], shots = {}, binary = true) {
   return async (url, init = {}) => {
     const parsed = new URL(url);
     log.push({url, init});
+    const shot = url.match(/^http:\/\/127\.0\.0\.1:8080\/api\/v1\/shots\/([^/?]+)$/);
+    if (shot) {
+      const record = shots[decodeURIComponent(shot[1])];
+      return {status: record ? 200 : 404, ok: Boolean(record), headers: {get: () => null}, text: async () => JSON.stringify(record ?? {error: 'not found'})};
+    }
     const response = await request({host: parsed.hostname.replace(/^\[|\]$/g, ''), port: Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80)),
       secure: parsed.protocol === 'https:', pin: init.tlsPinSha256}, init.method || 'GET', parsed.pathname + parsed.search, init.body, init.headers || {});
     return {status: response.status, ok: response.status >= 200 && response.status < 300,
-      headers: {get: (name) => response.headers[name.toLowerCase()] ?? null}, text: async () => response.body};
+      headers: {get: (name) => response.headers[name.toLowerCase()] ?? null}, text: async () => response.body,
+      ...(binary && init.responseType === 'base64' ? {base64: async () => response.bytes.toString('base64')} : {})};
   };
 }
 
@@ -175,25 +189,27 @@ export function hostTransport(log = []) {
   };
 }
 
-export async function loadPlugin(settings, {fetchLog = [], openLog = [], notices = []} = {}) {
+export async function loadPlugin(settings, {fetchLog = [], openLog = [], notices = [], shots = {}, binaryFetch = true} = {}) {
   const registrations = [];
   const host = {
     notify: (value) => { notices.push(['notify', value]); return 'request'; },
     dismissNotification: (id) => { notices.push(['dismiss', id]); },
-    devices: {register(definition, handlers) { registrations.push({definition, handlers}); return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:e64:${definition.instanceId}`}); }},
+    transport: hostTransport(openLog),
+    devices: {register(definition, handlers) { registrations.push({definition, handlers}); return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:${definition.driverId}:${definition.instanceId}`}); }},
   };
-  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, Date, Math, encodeURIComponent, btoa: globalThis.btoa, fetch: hostFetch(fetchLog)};
+  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, Date, Math, encodeURIComponent, btoa: globalThis.btoa, fetch: hostFetch(fetchLog, shots, binaryFetch)};
   vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
   const plugin = sandbox.createPlugin(host);
   await plugin.onLoad(settings);
   const transport = hostTransport(openLog);
   const sessions = registrations.map(({definition, handlers}) => {
-    const session = {id: definition.instanceId, published: [], disconnected: 0};
+    const session = {id: definition.instanceId, driverId: definition.driverId, handlers, published: [], disconnected: 0};
     session.context = {transport, publish: async (value) => { session.published.push(JSON.parse(JSON.stringify(value))); }, reportDisconnected: async () => { session.disconnected++; }};
     session.connect = () => handlers.connect(session.context);
     session.disconnect = () => handlers.disconnect();
     session.diagnostics = async (read) => {
-      const response = await plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: `plugin:mahlkoenig-e64.reaplugin:e64:${definition.instanceId}`, ...(read ? {read} : {})}});
+      const response = await plugin.handleHttpRequest({endpoint: read === 'grind-events' ? 'grind-events' : 'e64-diagnostics', method: 'GET',
+        query: {deviceId: `plugin:mahlkoenig-e64.reaplugin:${definition.driverId}:${definition.instanceId}`, ...(read && read !== 'grind-events' ? {read} : {})}});
       return {status: response.status, headers: response.headers, body: JSON.parse(response.body)};
     };
     return session;

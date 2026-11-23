@@ -5,8 +5,18 @@ function createPlugin(host) {
   const commands = {
     state: ["RequestDriverState", "RequestDriverStateResult"],
     config: ["RequestDriverConfig", "RequestDriverConfigResult"],
-    machineInfo: ["RequestNachineInfo", "RequestNachineInfoResult"]
+    machineInfo: ["RequestNachineInfo", "RequestNachineInfoResult"],
+    action: ["GrinderAction", "GrinderActionResult"],
+    probe: ["RequestLogMessages", "RequestLogMessagesResult"]
   };
+  // The only GrinderAction suffixes this plugin may ever send; everything else
+  // (calibration, fans, ESP, input injection, config writes, unlock tooling) is out of scope.
+  const ALLOWED_ACTIONS = ["StartGrindGbw", "Stop", "SetAgsaTargetDdValue", "AddBrewEvent", "SetBacklightBrightness"];
+  const GRIND_STATES = ["grinding", "running", "active", "grind", "manualstartgrind", "gbtstartgrind", "gbwpostgrind"];
+  const OWNERS = ["off", "grinder", "decaid"];
+  const MAX_STEP_UM = 10, BREW_MIN_MS = 10000, LINK_BEFORE_MS = 5 * 60000, LINK_AFTER_MS = 60000, MAX_GRIND_EVENTS = 20, PROBE_MS = 3000;
+  const DECAID_API = "http://127.0.0.1:8080";
+  const MAX_LOG_BYTES = 8 * 1024 * 1024, LOG_MATCH_MS = 10 * 60000;
   // Diagnostics keep only these vendor fields. Serial numbers, session ids,
   // Wi-Fi credentials, cloud URLs and log messages never leave the plugin.
   const exposed = {
@@ -19,6 +29,176 @@ function createPlugin(host) {
       "targetWeightGr", "buttonAction", "dddCalibrationAngleMilliDeg"],
     machineInfo: ["grinderType"]
   };
+  // --- Grind-log codec: base64, ZIP (STORE/DEFLATE), RFC 1951 inflate, UTF-8, CSV.
+  // QuickJS has no zlib or TextDecoder; these are small and bounded by `limit`.
+  const B64 = {};
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".split("").forEach((c, i) => { B64[c] = i; });
+  function fromBase64(text) {
+    const out = new Uint8Array(Math.floor(text.length * 3 / 4) + 3);
+    let acc = 0, bits = 0, n = 0;
+    for (let i = 0; i < text.length; i++) {
+      const v = B64[text[i]];
+      if (v === undefined) { if (text[i] === "=") break; continue; }
+      acc = ((acc << 6) | v) & 0xffffff; bits += 6;
+      if (bits >= 8) { bits -= 8; out[n++] = (acc >> bits) & 255; }
+    }
+    return out.subarray(0, n);
+  }
+  const LBASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+  const LEXT = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+  const DBASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+  const DEXT = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+  const CLORDER = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+  function huffman(lengths) {
+    const count = new Uint16Array(16), offs = new Uint16Array(16), symbol = new Uint16Array(lengths.length);
+    for (let i = 0; i < lengths.length; i++) count[lengths[i]]++;
+    count[0] = 0;
+    for (let i = 1; i < 16; i++) offs[i] = offs[i - 1] + count[i - 1];
+    for (let i = 0; i < lengths.length; i++) if (lengths[i]) symbol[offs[lengths[i]]++] = i;
+    return {count, symbol};
+  }
+  function inflate(input, limit) {
+    let pos = 0, buf = 0, cnt = 0, len = 0, out = new Uint8Array(Math.min(limit, Math.max(1024, input.length * 4)));
+    const fail = (why) => { throw new Error("inflate: " + why); };
+    const bits = (n) => {
+      while (cnt < n) { if (pos >= input.length) fail("truncated"); buf |= input[pos++] << cnt; cnt += 8; }
+      const v = buf & ((1 << n) - 1); buf >>>= n; cnt -= n; return v;
+    };
+    const put = (b) => {
+      if (len === out.length) {
+        if (len >= limit) fail("output exceeds limit");
+        const grown = new Uint8Array(Math.min(limit, out.length * 2)); grown.set(out); out = grown;
+      }
+      out[len++] = b;
+    };
+    const decode = (h) => {
+      let code = 0, first = 0, index = 0;
+      for (let l = 1; l < 16; l++) {
+        code |= bits(1);
+        const c = h.count[l];
+        if (code - c < first) return h.symbol[index + (code - first)];
+        index += c; first = (first + c) << 1; code <<= 1;
+      }
+      return fail("bad code");
+    };
+    let fixed = null, last = 0;
+    while (!last) {
+      last = bits(1);
+      const type = bits(2);
+      if (type === 0) {
+        buf = 0; cnt = 0;
+        if (pos + 4 > input.length) fail("truncated");
+        const n = input[pos] | (input[pos + 1] << 8);
+        if ((n ^ (input[pos + 2] | (input[pos + 3] << 8))) !== 0xffff) fail("bad stored length");
+        pos += 4;
+        if (pos + n > input.length) fail("truncated");
+        for (let i = 0; i < n; i++) put(input[pos++]);
+        continue;
+      }
+      let lit, dist;
+      if (type === 1) {
+        if (!fixed) {
+          const l = new Uint8Array(288);
+          l.fill(8, 0, 144); l.fill(9, 144, 256); l.fill(7, 256, 280); l.fill(8, 280, 288);
+          fixed = {lit: huffman(l), dist: huffman(new Uint8Array(30).fill(5))};
+        }
+        lit = fixed.lit; dist = fixed.dist;
+      } else if (type === 2) {
+        const nlen = bits(5) + 257, ndist = bits(5) + 1, ncode = bits(4) + 4;
+        const cl = new Uint8Array(19);
+        for (let i = 0; i < ncode; i++) cl[CLORDER[i]] = bits(3);
+        const ch = huffman(cl), lengths = new Uint8Array(nlen + ndist);
+        for (let i = 0; i < nlen + ndist;) {
+          const sym = decode(ch);
+          if (sym < 16) { lengths[i++] = sym; continue; }
+          let repeat, value = 0;
+          if (sym === 16) { if (!i) fail("repeat without length"); value = lengths[i - 1]; repeat = 3 + bits(2); }
+          else repeat = sym === 17 ? 3 + bits(3) : 11 + bits(7);
+          if (i + repeat > nlen + ndist) fail("too many lengths");
+          while (repeat--) lengths[i++] = value;
+        }
+        lit = huffman(lengths.subarray(0, nlen)); dist = huffman(lengths.subarray(nlen));
+      } else fail("bad block type");
+      for (;;) {
+        const sym = decode(lit);
+        if (sym < 256) { put(sym); continue; }
+        if (sym === 256) break;
+        if (sym > 285) fail("bad length");
+        const n = LBASE[sym - 257] + bits(LEXT[sym - 257]);
+        const ds = decode(dist);
+        if (ds > 29) fail("bad distance");
+        const d = DBASE[ds] + bits(DEXT[ds]);
+        if (d > len) fail("distance too far");
+        for (let i = 0; i < n; i++) put(out[len - d]);
+      }
+    }
+    return out.slice(0, len);
+  }
+  function readZip(bytes, wanted, limit) {
+    const u16 = (o) => bytes[o] | (bytes[o + 1] << 8), u32 = (o) => (u16(o) | (u16(o + 2) << 16)) >>> 0;
+    const latin1 = (from, to) => { let t = ""; for (let i = from; i < to; i++) t += String.fromCharCode(bytes[i]); return t; };
+    let end = -1;
+    for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--) if (u32(i) === 0x06054b50) { end = i; break; }
+    if (end < 0) throw new Error("zip: no end of central directory");
+    let p = u32(end + 16);
+    for (let n = u16(end + 10); n > 0; n--) {
+      if (p + 46 > bytes.length || u32(p) !== 0x02014b50) throw new Error("zip: bad central directory");
+      const flags = u16(p + 8), method = u16(p + 10), csize = u32(p + 20), usize = u32(p + 24), nlen = u16(p + 28);
+      const name = latin1(p + 46, p + 46 + nlen), local = u32(p + 42);
+      p += 46 + nlen + u16(p + 30) + u16(p + 32);
+      if (!wanted(name)) continue;
+      if (flags & 1) throw new Error("zip: encrypted entry");
+      if (usize > limit) throw new Error("zip: entry exceeds limit");
+      if (u32(local) !== 0x04034b50) throw new Error("zip: bad local header");
+      const start = local + 30 + u16(local + 26) + u16(local + 28);
+      if (start + csize > bytes.length) throw new Error("zip: truncated entry");
+      const data = bytes.subarray(start, start + csize);
+      if (method === 0) return data.slice();
+      if (method === 8) return inflate(data, limit);
+      throw new Error("zip: unsupported method " + method);
+    }
+    return null;
+  }
+  function utf8(bytes) {
+    const parts = [];
+    for (let i = 0; i < bytes.length;) {
+      let chunk = "";
+      for (const stop = Math.min(bytes.length, i + 8192); i < stop;) {
+        const b = bytes[i++];
+        if (b < 0x80) chunk += String.fromCharCode(b);
+        else if (b < 0xe0) chunk += String.fromCharCode(((b & 31) << 6) | (bytes[i++] & 63));
+        else if (b < 0xf0) { chunk += String.fromCharCode(((b & 15) << 12) | ((bytes[i] & 63) << 6) | (bytes[i + 1] & 63)); i += 2; }
+        else {
+          const cp = (((b & 7) << 18) | ((bytes[i] & 63) << 12) | ((bytes[i + 1] & 63) << 6) | (bytes[i + 2] & 63)) - 0x10000; i += 3;
+          chunk += String.fromCharCode(0xd800 + (cp >> 10), 0xdc00 + (cp & 1023));
+        }
+      }
+      parts.push(chunk);
+    }
+    return parts.join("");
+  }
+  function parseCsv(text) {
+    const header = text.slice(0, text.search(/\r?\n|$/));
+    const sep = header.includes(";") && !header.includes(",") ? ";" : ",";
+    const rows = [];
+    let row = [], field = "", quoted = false, i = 0;
+    if (text.charCodeAt(0) === 0xfeff) i = 1;
+    for (; i < text.length; i++) {
+      const c = text[i];
+      if (quoted) {
+        if (c !== '"') field += c;
+        else if (text[i + 1] === '"') { field += '"'; i++; }
+        else quoted = false;
+      } else if (c === '"' && field === "") quoted = true;
+      else if (c === sep) { row.push(field); field = ""; }
+      else if (c === "\n" || c === "\r") {
+        if (c === "\r" && text[i + 1] === "\n") i++;
+        row.push(field); rows.push(row); row = []; field = "";
+      } else field += c;
+    }
+    if (field !== "" || row.length) { row.push(field); rows.push(row); }
+    return rows;
+  }
   function pick(data, keys) {
     const out = {};
     for (const key of keys) if (Object.prototype.hasOwnProperty.call(data, key)) out[key] = data[key];
@@ -72,6 +252,11 @@ function createPlugin(host) {
     const passwords = jsonSetting(settings, "PasswordsJson", {});
     const mintTokens = jsonSetting(settings, "MintTokens", false);
     const allowNoPassword = jsonSetting(settings, "AllowNoPasswordWorkaround", false);
+    const allowControl = jsonSetting(settings, "AllowControl", false);
+    const syncBacklight = jsonSetting(settings, "SyncBacklight", false);
+    const owner = settings && settings.AdjustmentOwner !== undefined ? settings.AdjustmentOwner : "off";
+    if (typeof allowControl !== "boolean" || typeof syncBacklight !== "boolean") fail("AllowControl and SyncBacklight must be true or false");
+    if (!OWNERS.includes(owner)) fail("AdjustmentOwner must be off, grinder or decaid");
     if (!Array.isArray(rows) || rows.length > MAX || !tokens || Array.isArray(tokens) || typeof tokens !== "object") fail("invalid instance or token JSON");
     if (!passwords || Array.isArray(passwords) || typeof passwords !== "object") fail("PasswordsJson must be an object");
     if (typeof mintTokens !== "boolean") fail("MintTokens must be true or false");
@@ -98,7 +283,7 @@ function createPlugin(host) {
       if (mintTokens && !token && !password && !allowNoPassword) fail("MintTokens needs a password or AllowNoPasswordWorkaround for " + id);
       ids.add(id);
       return {id, name, scheme, host: row.host, port: row.port, pollMs, token, certSha256, restPort,
-        password, mintTokens, allowNoPassword, staticToken: Boolean(token)};
+        password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner};
     });
     if (Object.keys(tokens).some((id) => !ids.has(id))) fail("TokensJson contains an unknown id");
     if (Object.keys(passwords).some((id) => !ids.has(id))) fail("PasswordsJson contains an unknown id");
@@ -183,8 +368,8 @@ function createPlugin(host) {
     return config.host.indexOf(":") >= 0 && config.host[0] !== "[" ? "[" + config.host + "]" : config.host;
   }
 
-  function url(config) {
-    return config.scheme + "://" + hostName(config) + ":" + config.port + "/?token=" + encodeURIComponent(config.token);
+  function url(config, token = config.token) {
+    return config.scheme + "://" + hostName(config) + ":" + config.port + "/?token=" + encodeURIComponent(token);
   }
   function stateOf(data) {
     if (data && data.grindFailure === true) return "error";
@@ -292,7 +477,11 @@ function createPlugin(host) {
 
   function make(config) {
     return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, observationExpiry: null, connected: false, observations: {}, lastObservationAt: null, tokenSource: config.staticToken ? "static" : "none", lastMintAt: null, lastMintError: null, mintFailures: 0, nextMintAt: null,
-      xenia: {syncWeight: 0, syncFilter: 0, lastScriptId: null, lastScriptAt: null}};
+      xenia: {syncWeight: 0, syncFilter: 0, lastScriptId: null, lastScriptAt: null},
+      control: {allowControl: config.allowControl, debugMode: config.allowControl ? "unprobed" : "disabled", probedAt: null,
+        owner: config.owner, syncBacklight: config.syncBacklight, lastAction: null, lastBrewEvent: null},
+      grindEvents: [], lastGrindState: null,
+      grindLog: {status: config.mintTokens ? "idle" : "needs-mint-tokens", lastAt: null, lastError: null, failures: 0, nextAt: null}};
   }
   function clear(instance) { if (instance.poll !== null) clearTimeout(instance.poll); instance.poll = null; clearTimeout(instance.observationExpiry); instance.observationExpiry = null; }
   function rejectAll(instance, reason) { for (const item of instance.pending.values()) { clearTimeout(item.timer); item.reject(new Error(reason)); } instance.pending.clear(); }
@@ -330,7 +519,11 @@ function createPlugin(host) {
           instance.context.publish({state: snapshot.state}).catch(() => failSession(instance, epoch, "E64 observation expired"));
         }, TIMEOUT);
       }
+      trackGrind(instance, message.data, snapshot.observedSetting);
       instance.context.publish(snapshot).then(item.resolve, item.reject);
+    } else if (item.name === "action") {
+      if (!message.data || typeof message.data !== "object" || Array.isArray(message.data)) { item.reject(new Error("E64 invalid action response")); return; }
+      item.resolve(message.data);
     } else {
       if (!message.data || typeof message.data !== "object" || Array.isArray(message.data)) { item.reject(new Error("E64 invalid read response")); return; }
       const observed = pick(message.data, exposed[item.name]);
@@ -366,7 +559,7 @@ function createPlugin(host) {
     // The E64 REST API is HTTPS-only (443; HTTP 80 redirects), whatever the WebSocket scheme.
     let failure = "login request failed";
     try {
-      const response = await fetch("https://" + hostName(config) + (config.restPort === 443 ? "" : ":" + config.restPort) + "/rest_api/login", {
+      const response = await fetch(restUrl(config, "login"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({userRole: role, password}),
@@ -377,6 +570,8 @@ function createPlugin(host) {
       else {
         const auth = response.headers && response.headers.get ? response.headers.get("authorization") : "";
         if (auth && auth.startsWith("Bearer ") && auth.slice(7).trim()) {
+          const cookie = /PHPSESSID=([^;,\s]+)/.exec(response.headers.get("set-cookie") || "");
+          instance.restCookie = cookie ? cookie[1] : null;
           instance.tokenSource = config.password ? "password" : "workaround";
           instance.lastMintAt = new Date().toISOString();
           instance.lastMintError = null; instance.mintFailures = 0; instance.nextMintAt = null;
@@ -401,6 +596,194 @@ function createPlugin(host) {
       else host.notify({id, message: "E64 " + instance.config.name + ": " + failure + ". Check the Owner password, certSha256 and grinder address.",
         action: {id: "help", label: "Help", type: "openExternalUrl", url: "https://github.com/MaxRink/decaid-e64ws-plugin#token-acquisition"}});
     } catch (_) {}
+  }
+  // A grind is complete when the state leaves the grind family. The grind UUID
+  // needs the machine-log ZIP, which the host fetch cannot return yet, so it stays null.
+  function trackGrind(instance, data, setting) {
+    const now = typeof data.grindState === "string" ? data.grindState.toLowerCase() : null;
+    const was = instance.lastGrindState;
+    instance.lastGrindState = now;
+    if (!was || !GRIND_STATES.includes(was) || (now && GRIND_STATES.includes(now))) return;
+    const finite = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
+    instance.grindEvents.unshift({grindUuid: null, completedAt: new Date().toISOString(), completedAtMs: Date.now(),
+      targetWeightGr: finite(data.grindTargetWeightGr), resultWeightGr: finite(data.grindResultWeightGr),
+      motorRunTimeMs: finite(data.motorRunTimeMs), setting: setting === undefined ? null : setting, linkedShotId: null});
+    instance.grindEvents.length = Math.min(instance.grindEvents.length, MAX_GRIND_EVENTS);
+    enrichGrind(instance, instance.grindEvents[0]);
+  }
+  // After each completed grind, read the newest rows of the grinder's own grind
+  // log (download_machine_logs ZIP) and attach the matching row: grind UUID and
+  // recipe. Needs a host whose fetch supports responseType "base64".
+  async function enrichGrind(instance, grind) {
+    const log = instance.grindLog, config = instance.config;
+    if (log.status === "unsupported-host" || log.status === "needs-mint-tokens") return;
+    if (log.nextAt !== null && Date.now() < log.nextAt) return;
+    log.status = "downloading";
+    try {
+      const token = await mintToken(instance);
+      const response = await fetch(restUrl(config, "download_machine_logs"), {
+        method: "POST", body: "{}", responseType: "base64",
+        headers: {"Content-Type": "application/json", Authorization: "Bearer " + token, ...(instance.restCookie ? {Cookie: "PHPSESSID=" + instance.restCookie} : {})},
+        ...(config.certSha256 ? {tlsPinSha256: config.certSha256} : {})
+      });
+      if (!response || typeof response.base64 !== "function") { log.status = "unsupported-host"; return; }
+      if (!response.ok) throw new Error("grind log HTTP " + response.status);
+      const csv = readZip(fromBase64(await response.base64()), (name) => /GrindLogs[^/]*\.csv$/i.test(name), MAX_LOG_BYTES);
+      if (!csv) throw new Error("grind log CSV missing");
+      const row = matchGrindRow(instance, grind, grindRows(utf8(csv)));
+      if (!row) throw new Error("no matching grind log row");
+      applyGrindRow(grind, row);
+      Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0, nextAt: null});
+    } catch (error) {
+      log.failures++;
+      Object.assign(log, {status: "failed", lastError: error && /^(grind log|no matching|zip|inflate|login)/.test(error.message) ? error.message : "grind log download failed",
+        nextAt: Date.now() + Math.min(MINT_BACKOFF_MS * Math.pow(2, log.failures - 1), MINT_BACKOFF_MAX_MS)});
+    }
+  }
+  function restUrl(config, route) {
+    return "https://" + hostName(config) + (config.restPort === 443 ? "" : ":" + config.restPort) + "/rest_api/" + route;
+  }
+  // Rows as objects, newest first (highest grind_id), at most 20.
+  function grindRows(text) {
+    const table = parseCsv(text);
+    if (!table.length) return [];
+    const header = table[0].map((name) => name.trim());
+    return table.slice(1).filter((cells) => cells.length === header.length)
+      .map((cells) => Object.fromEntries(header.map((name, i) => [name, cells[i]])))
+      .sort((a, b) => Number(b.grind_id) - Number(a.grind_id)).slice(0, 20);
+  }
+  // The newest unused row whose recipe amount matches the observed target and
+  // whose device time lies within 10 minutes of the observed completion.
+  function matchGrindRow(instance, grind, rows) {
+    const used = new Set(instance.grindEvents.map((event) => event.grindUuid).filter(Boolean));
+    return rows.find((row) => {
+      if (!row.grind_uuid || used.has(row.grind_uuid)) return false;
+      const amount = Number(row.recipe_amount) / 1000;
+      if (grind.targetWeightGr && Number.isFinite(amount) && amount > 0 && Math.abs(amount - grind.targetWeightGr) > 0.5) return false;
+      const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(row.grind_date_time || "");
+      return !m || Math.abs(new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() - grind.completedAtMs) <= LOG_MATCH_MS;
+    }) || null;
+  }
+  function applyGrindRow(grind, row) {
+    const num = (key, scale = 1) => row[key] === undefined || row[key] === "" || !Number.isFinite(Number(row[key])) ? null : Number(row[key]) / scale;
+    const um = (key) => { const dum = num(key); return dum === null ? null : String(Math.floor((dum + 5) / 10)); };
+    const text = (key) => typeof row[key] === "string" && row[key] !== "" ? row[key].slice(0, 128) : null;
+    grind.grindUuid = text("grind_uuid");
+    grind.log = {grindWeightGr: num("grind_weight", 1000), grindDurationMs: num("grind_duration"), setting: um("grind_ddd"),
+      successful: row.grind_successfull === undefined ? null : row.grind_successfull === "1" || row.grind_successfull === "true"};
+    grind.recipe = {index: num("recipe_index"), uuid: text("recipe_uuid"), mode: text("recipe_mode"), type: text("recipe_type"),
+      amountGr: num("recipe_amount", 1000), setting: um("recipe_coarseness"), brewTimeMs: num("recipe_brew_time"), brewWeightGr: num("recipe_brew_weight", 1000)};
+  }
+  // Debug-mode probe on a throwaway connection with its own token: a locked
+  // image closes the socket on any dev=1 command, so the main session is never
+  // used. RequestLogMessages is a read-only dev=1 type without side effects; its
+  // reply is discarded.
+  async function probeDebugMode(instance) {
+    const control = instance.control, config = instance.config;
+    if (!config.mintTokens) { control.debugMode = "unprobed-static-token"; return; }
+    let handle = null;
+    try {
+      const token = await mintToken(instance);
+      const pin = config.scheme === "wss" && config.certSha256 ? {tlsPinSha256: config.certSha256} : {};
+      handle = (await host.transport.open({kind: "websocket", url: url(config, token), ...pin})).handle;
+      control.debugMode = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve("unknown"), PROBE_MS);
+        host.transport.onEvent(handle, (event) => {
+          if (event.type === "close" || event.type === "error") { clearTimeout(timer); resolve("locked"); return; }
+          if (event.type !== "data" || event.dataType !== "text") return;
+          let message; try { message = JSON.parse(event.data); } catch (_) { return; }
+          if (message && message.type === commands.probe[1] && message.refId === 1) { clearTimeout(timer); resolve("available"); }
+        });
+        host.transport.send(handle, {type: "text", data: JSON.stringify({type: commands.probe[0], msgId: 1, data: {}})}).catch(() => { clearTimeout(timer); resolve("locked"); });
+      });
+    } catch (_) {
+      control.debugMode = "unknown";
+    } finally {
+      control.probedAt = new Date().toISOString();
+      if (handle !== null) await host.transport.close(handle).catch(() => {});
+    }
+  }
+  function action(instance, actionType, data) {
+    if (!ALLOWED_ACTIONS.includes(actionType)) return Promise.reject(new Error("E64 action not allowed: " + actionType));
+    if (instance.control.debugMode !== "available") return Promise.reject(new Error("E64 control is unavailable: debug mode " + instance.control.debugMode));
+    const record = (ok, error) => { instance.control.lastAction = {actionType, ok, error: error || null, at: new Date().toISOString()}; controlNotice(instance, ok ? null : actionType + " failed: " + error); };
+    return request(instance, "action", false, {actionType, ...data}).then((result) => {
+      if (result.success !== true) throw new Error("rejected by the grinder");
+      record(true); return result;
+    }, (error) => { throw error; }).catch((error) => { record(false, error.message); throw new Error("E64 " + actionType + " failed: " + error.message); });
+  }
+  function controlNotice(instance, failure) {
+    const id = "control-" + instance.config.id;
+    try {
+      if (failure === null) host.dismissNotification(id);
+      else host.notify({id, message: "E64 " + instance.config.name + ": " + failure + "."});
+    } catch (_) {}
+  }
+  function controlHandlers(instance) {
+    const state = () => instance.observations.state || {};
+    return {
+      // Grind by weight with the grinder's own target; an unbounded manual grind is never started remotely.
+      start: () => {
+        const target = state().grindTargetWeightGr;
+        if (!(typeof target === "number" && target > 0)) return Promise.reject(new Error("E64 has no grind-by-weight target"));
+        return action(instance, "StartGrindGbw", {targetWeightGr: target}).then(() => {});
+      },
+      stop: () => action(instance, "Stop", {}).then(() => {}),
+      setGrindSetting: (setting) => {
+        if (instance.control.owner !== "decaid") return Promise.reject(new Error("E64 grind setting writes need AdjustmentOwner decaid"));
+        const value = typeof setting === "string" && /^\d{1,5}$/.test(setting.trim()) ? Number(setting.trim()) : NaN;
+        const current = state().ddValueDum;
+        if (!Number.isSafeInteger(current)) return Promise.reject(new Error("E64 has no current grind setting"));
+        // Firmware range limits are variant-specific and not recovered, so each move stays near the current reading.
+        if (!Number.isInteger(value) || Math.abs(value - Math.floor((current + 5) / 10)) > MAX_STEP_UM) {
+          return Promise.reject(new Error("E64 grind setting must be whole micrometres within " + MAX_STEP_UM + " of the current value"));
+        }
+        return action(instance, "SetAgsaTargetDdValue", {targetDdValue: value * 10}).then(() => {});
+      }
+    };
+  }
+  let machineSleeping = null;
+  function syncBacklight(payload) {
+    const sleeping = Boolean(payload.state && payload.state.state === "sleeping");
+    if (sleeping === machineSleeping) return;
+    const first = machineSleeping === null;
+    machineSleeping = sleeping;
+    if (first && !sleeping) return;
+    for (const instance of instances.values()) {
+      if (instance.control.syncBacklight && instance.connected && instance.control.debugMode === "available") {
+        action(instance, "SetBacklightBrightness", {brightness: sleeping ? 0 : 100}).catch(() => {});
+      }
+    }
+  }
+  // AdjustmentOwner "grinder": report a finished Decaid shot to the grinder's GbS
+  // as a brew event for the grind that preceded it.
+  async function brewEvent(instance, shotId) {
+    const result = (status, reason) => { instance.control.lastBrewEvent = {shotId, status, reason: reason || null, at: new Date().toISOString()}; };
+    try {
+      const response = await fetch(DECAID_API + "/api/v1/shots/" + encodeURIComponent(shotId));
+      if (!response.ok) return result("skipped", "shot unavailable");
+      const shot = JSON.parse(await response.text());
+      const samples = Array.isArray(shot.measurements) ? shot.measurements : [];
+      const times = samples.map((sample) => Date.parse(sample && sample.machine && sample.machine.timestamp)).filter(Number.isFinite);
+      const brewTimeMs = times.length > 1 ? times[times.length - 1] - times[0] : 0;
+      const weight = samples.length && samples[samples.length - 1].scale ? Number(samples[samples.length - 1].scale.weight) : NaN;
+      const startedAt = Date.parse(shot.timestamp);
+      if (!(brewTimeMs > BREW_MIN_MS)) return result("skipped", "shot not longer than 10 s");
+      if (!Number.isFinite(weight) || weight <= 0 || !Number.isFinite(startedAt)) return result("skipped", "shot has no weight or start time");
+      // Same linkage as assisted dial-in: the newest unused successful grind that
+      // completed at most 5 min before the shot start, or up to 1 min after it (clock skew).
+      const grind = instance.grindEvents.find((candidate) => candidate.linkedShotId === null &&
+        !(candidate.log && candidate.log.successful === false) &&
+        candidate.completedAtMs - startedAt <= LINK_AFTER_MS && startedAt - candidate.completedAtMs <= LINK_BEFORE_MS);
+      if (!grind) return result("skipped", "no successful grind within 5 min before the shot");
+      grind.linkedShotId = shotId;
+      if (!grind.grindUuid) return result("skipped", "grind uuid unavailable");
+      await action(instance, "AddBrewEvent", {grindUuid: grind.grindUuid, machineName: "Decent DE1", groupHead: "1", doseIndex: 0,
+        validity: true, brewTimeMs: Math.round(brewTimeMs), brewWeightMg: Math.round(weight * 1000)});
+      result("sent");
+    } catch (error) {
+      result("failed", error && error.message ? error.message : "brew event failed");
+    }
   }
   function disconnect(instance, expectedEpoch, reason) {
     if (expectedEpoch !== undefined && expectedEpoch !== instance.epoch) return Promise.resolve();
@@ -432,7 +815,7 @@ function createPlugin(host) {
       throw new Error("E64 connection failed" + detail);
     }
   }
-  function request(instance, name, publish) {
+  function request(instance, name, publish, payload) {
     if (!instance.connected || !instance.transport || !instance.handle) return Promise.reject(new Error("E64 is disconnected"));
     // Diagnostics reads must not starve the single in-flight state poll.
     if (!publish && instance.pending.size >= MAX_PENDING) return Promise.reject(new Error("E64 request queue is full"));
@@ -440,23 +823,33 @@ function createPlugin(host) {
     return new Promise((resolve, reject) => {
       const item = {epoch, type: command[1], name, publish, resolve, reject, timer: setTimeout(() => { if (instance.pending.delete(id)) reject(new Error("E64 request timed out")); }, TIMEOUT)};
       instance.pending.set(id, item);
-      instance.transport.send(instance.handle, {type: "text", data: JSON.stringify({type: command[0], msgId: id, data: {}})}).catch(() => { if (instance.pending.delete(id)) { clearTimeout(item.timer); reject(new Error("E64 request failed")); } });
+      instance.transport.send(instance.handle, {type: "text", data: JSON.stringify({type: command[0], msgId: id, data: payload || {}})}).catch(() => { if (instance.pending.delete(id)) { clearTimeout(item.timer); reject(new Error("E64 request failed")); } });
     });
   }
   const plugin = {
     id: "mahlkoenig-e64.reaplugin",
     onLoad(settings) {
       const configs = configuration(settings);
-      return Promise.all(configs.map((config) => {
+      return Promise.all(configs.map(async (config) => {
         const instance = make(config); instances.set(config.id, instance);
-        return host.devices.register({driverId: "e64", instanceId: config.id, name: config.name}, {connect: (context) => connect(instance, context), disconnect: () => disconnect(instance)})
+        // Control is only registered when the probe proves the grinder accepts it, so a locked grinder stays read-only.
+        if (config.allowControl) await probeDebugMode(instance);
+        const control = instance.control.debugMode === "available";
+        const handlers = {connect: (context) => connect(instance, context), disconnect: () => disconnect(instance), ...(control ? controlHandlers(instance) : {})};
+        return host.devices.register({driverId: control ? "e64-control" : "e64", instanceId: config.id, name: config.name}, handlers)
           .then((device) => { instance.deviceId = device.deviceId; return device; },
             // A failed registration drops only that instance; the others stay usable.
             () => { instances.delete(config.id); return null; });
       }));
     },
     onUnload() { return Promise.all(Array.from(instances.values()).map((instance) => disconnect(instance))); },
-    onEvent(event) { if (event && event.name === "stateUpdate" && event.payload) updateXenia(event.payload); },
+    onEvent(event) {
+      if (!event || !event.payload) return;
+      if (event.name === "stateUpdate") { updateXenia(event.payload); syncBacklight(event.payload); }
+      if (event.name === "shotStored" && typeof event.payload.id === "string") {
+        for (const instance of instances.values()) if (instance.control.owner === "grinder" && instance.control.debugMode === "available") brewEvent(instance, event.payload.id);
+      }
+    },
     handleHttpRequest(request) {
       const jsonResponse = (status, payload) => ({status, headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
       if (request.endpoint === "xenia-mako" || request.endpoint === "xenia-machine" ||
@@ -489,15 +882,18 @@ function createPlugin(host) {
         sync.lastScriptAt = new Date().toISOString();
         return jsonResponse(200, {ok: true, ID: body.ID, started: false});
       }
-      if (request.endpoint !== "e64-diagnostics") return jsonResponse(404, {error: "unknown endpoint"});
+      if (request.endpoint !== "e64-diagnostics" && request.endpoint !== "grind-events") return jsonResponse(404, {error: "unknown endpoint"});
       if (request.method !== "GET") return jsonResponse(405, {error: "method not allowed"});
       const id = request.query && request.query.deviceId;
       const instance = Array.from(instances.values()).find((candidate) => candidate.deviceId === id);
       if (!instance) return {status: 404, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unknown instance"})};
+      const grindEvents = () => instance.grindEvents.map(({completedAtMs, ...event}) => event);
+      if (request.endpoint === "grind-events") return jsonResponse(200, {events: grindEvents(), log: instance.grindLog});
       const read = request.query.read;
-      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "connection" && read !== "xenia") return jsonResponse(400, {error: "unsupported read"});
+      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "connection" && read !== "xenia" && read !== "control") return jsonResponse(400, {error: "unsupported read"});
       const operation = read === undefined ? null : read;
       if (operation === "xenia") return Promise.resolve(jsonResponse(200, xeniaRead(instance)));
+      if (operation === "control") return Promise.resolve(jsonResponse(200, instance.control));
       if (operation === "connection") {
         const connection = {connected: instance.connected, tokenSource: instance.tokenSource,
           lastMintAt: instance.lastMintAt, lastMintError: instance.lastMintError,
@@ -506,9 +902,12 @@ function createPlugin(host) {
         return Promise.resolve({status: 200, headers: {"Content-Type": "application/json"}, body: JSON.stringify(connection)});
       }
       const headers = (live) => ({"Content-Type": "application/json", "X-E64-Observation-State": live ? "live" : (instance.lastObservationAt ? "last-known" : "none"), ...(instance.lastObservationAt ? {"X-E64-Observation-Time": instance.lastObservationAt} : {})});
-      return (operation ? requestRead(instance, operation) : Promise.resolve(instance.observations)).then((data) => ({status: 200, headers: headers(Boolean(operation)), body: JSON.stringify(data)}), () => ({status: 503, headers: headers(false), body: JSON.stringify({error: "E64 unavailable"})}));
+      const known = instance.grindEvents.length ? {...instance.observations, grindEvents: grindEvents()} : instance.observations;
+      return (operation ? requestRead(instance, operation) : Promise.resolve(known)).then((data) => ({status: 200, headers: headers(Boolean(operation)), body: JSON.stringify(data)}), () => ({status: 503, headers: headers(false), body: JSON.stringify({error: "E64 unavailable"})}));
     }
   };
   function requestRead(instance, operation) { return request(instance, operation, false); }
+  // Internal codec, exposed for tests only.
+  plugin.codec = {fromBase64, inflate, readZip, utf8, parseCsv};
   return plugin;
 }

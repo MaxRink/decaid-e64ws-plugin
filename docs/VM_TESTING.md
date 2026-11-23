@@ -80,12 +80,8 @@ ok disconnected=false
 ```
 
 The `observedSetting` value is present only after a valid
-`ddSensorFailed:false` state reply. To exercise it, run the vendor calibration
-first:
-
-```sh
-"$VG" wss --json-message '{"type":"GrinderAction","msgId":91,"data":{"actionType":"CalibrateDdSensor"}}'
-```
+`ddSensorFailed:false` state reply. To exercise it, calibrate the DD sensor in
+the virtual grinder first, using the VM's own tooling (outside this repository).
 
 The state must then report `agsaStatus:"Normal"`, `ddSensorFailed:false` and a
 safe integer `ddValueDum`.
@@ -96,8 +92,10 @@ safe integer `ddValueDum`.
   vendor `RequestDriverStateResult`, not just the mock.
 - The setting observation is gated on the sensor-valid flag and is cleared when
   the value expires or the session is replaced.
-- The plugin remains read-only: `start`, `setRpm`, motor and grind-setting
-  handlers are absent.
+- With `AllowControl` off (the default), the plugin registers only the
+  read-only driver: no `start`, `setRpm`, motor or grind-setting handlers.
+  Control is covered by the simulator tests in `test/sim-e2e.test.mjs` and
+  `ci/host_sim_test.dart` (see `docs/DEBUG_MODE.md`).
 
 It does **not** prove physical-hardware compatibility, self-signed `wss`
 support (the plugin intentionally rejects it), or a full Decaid GUI install.

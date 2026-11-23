@@ -49,11 +49,11 @@ test('diagnostics allowlist drops simulator session, clock and model fields', (t
   assert.equal(known.status, 200);
   assert.equal(known.body.state.ddValueDum, 5000);
   for (const field of ['sessionId', 'hmiTime', 'language', 'simulator', 'agsaHallSensorCounts']) assert.equal(Object.hasOwn(known.body.state, field), false, field);
-  for (const read of ['config', 'machineInfo']) {
+  for (const [read, expected] of [['config', {}], ['machineInfo', {grinderType: 'Unknown'}]]) {
     const live = await session.diagnostics(read);
     assert.equal(live.status, 200);
     assert.equal(live.headers['X-E64-Observation-State'], 'live');
-    assert.deepEqual(live.body, {}, `${read} has no allowlisted simulator fields`);
+    assert.deepEqual(live.body, expected, `${read} keeps only allowlisted simulator fields`);
   }
   assert.equal((await session.diagnostics('logs')).status, 400);
 }));
@@ -186,4 +186,138 @@ test('Xenia routes reach the plugin through tools/xenia_bridge.py', async (t) =>
   assert.equal((await call('POST', '/api/v2/scripts/execute', {ID: 9})).body.started, false);
   assert.equal((await call('POST', '/api/v2/brewratio', {SYNC_BEVERAGE_WEIGHT: null, SYNC_FILTER: 2})).status, 400);
   assert.ok(fs.existsSync(new URL('../tools/xenia_bridge.py', import.meta.url)));
+});
+
+const controlSettings = (sim, cert, extra = {}) => ({InstancesJson: instance(sim, {restPort: sim.httpPort, certSha256: cert.sha256}), TokensJson: '{}',
+  MintTokens: 'true', PasswordsJson: password('sim-password'), AllowControl: 'true', ...extra});
+const shotRecord = (startMs, seconds, grams) => ({id: 'x', timestamp: new Date(startMs).toISOString(), measurements: [
+  {machine: {timestamp: new Date(startMs).toISOString()}, scale: {weight: 0}},
+  {machine: {timestamp: new Date(startMs + seconds * 1000).toISOString()}, scale: {weight: grams}}]});
+
+test('a locked grinder is probed on a throwaway socket and stays read-only', (t) => {
+  const cert = makeCert();
+  return withSim(t, {tlsCert: cert, httpsCert: cert, devGate: 'locked'}, async (sim, keep) => {
+    const openLog = [];
+    const {session} = keep(await loadPlugin(controlSettings(sim, cert, {AdjustmentOwner: 'decaid'}), {openLog}));
+    assert.equal(session.driverId, 'e64');
+    assert.equal(session.handlers.start, undefined);
+    assert.equal(session.handlers.setGrindSetting, undefined);
+    assert.equal(openLog.length, 1, 'probe used its own connection');
+    await session.connect();
+    assert.deepEqual(last(session), {state: 'idle', observedSetting: '500'});
+    const control = (await session.diagnostics('control')).body;
+    assert.equal(control.debugMode, 'locked');
+    assert.equal(typeof control.probedAt, 'string');
+    assert.equal((await session.diagnostics('machineInfo')).body.grinderType, 'E64 WS');
+  });
+});
+
+test('debug mode enables start/stop, grind-setting writes, grind events and backlight sync', (t) => {
+  const cert = makeCert();
+  return withSim(t, {tlsCert: cert, httpsCert: cert, devGate: 'open'}, async (sim, keep) => {
+    const notices = [];
+    const loaded = keep(await loadPlugin(controlSettings(sim, cert, {AdjustmentOwner: 'decaid', SyncBacklight: 'true'}), {notices}));
+    const {session, plugin} = loaded;
+    assert.equal(session.driverId, 'e64-control');
+    await session.connect();
+    assert.equal((await session.diagnostics('control')).body.debugMode, 'available');
+    assert.equal((await session.diagnostics('machineInfo')).body.grinderType, 'Unknown', 'development image side effect');
+    await session.handlers.setGrindSetting('505');
+    await until(() => last(session).observedSetting === '505', 'AGSA move to 505');
+    assert.equal((await session.diagnostics()).body.state.ddValueDum, 5050);
+    await assert.rejects(session.handlers.setGrindSetting('520'), /within 10/);
+    await assert.rejects(session.handlers.setGrindSetting('5o5'), /whole micrometres/);
+    await session.handlers.start();
+    await until(() => last(session).state === 'grinding', 'grinding after start');
+    await session.handlers.stop();
+    await until(() => last(session).state === 'idle', 'idle after stop');
+    const events = (await session.diagnostics('grind-events')).body.events;
+    assert.equal(events.length, 1);
+    assert.equal(events[0].setting, '505');
+    assert.equal(events[0].targetWeightGr, 18);
+    plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'idle', substate: 'idle'}}});
+    plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'sleeping', substate: 'idle'}}});
+    await until(async () => (await control(sim, '/sim/state')).events.some((e) => e.event === 'backlight' && e.brightness === 0), 'backlight off');
+    plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'idle', substate: 'idle'}}});
+    await until(async () => (await control(sim, '/sim/state')).events.at(-1).brightness === 100, 'backlight restored');
+    const actions = (await control(sim, '/sim/state')).events.map((e) => e.event);
+    assert.equal(actions.includes('brew_event'), false, 'decaid ownership never sends brew events');
+    assert.equal((await session.diagnostics('control')).body.lastAction.ok, true);
+    assert.deepEqual(notices.filter(([, value]) => value === 'control-sim').at(-1), ['dismiss', 'control-sim']);
+    await session.disconnect();
+    await assert.rejects(session.handlers.stop(), /Stop failed/);
+    const notice = notices.filter(([kind]) => kind === 'notify').at(-1)[1];
+    assert.equal(notice.id, 'control-sim');
+    assert.match(notice.message, /^E64 Sim E64: Stop failed: /);
+  });
+});
+
+test('grinder ownership links shots to grinds and applies the brew-event gates', (t) => {
+  const cert = makeCert();
+  return withSim(t, {tlsCert: cert, httpsCert: cert, devGate: 'open'}, async (sim, keep) => {
+    const shots = {};
+    const loaded = keep(await loadPlugin(controlSettings(sim, cert, {AdjustmentOwner: 'grinder'}), {shots}));
+    const {session, plugin} = loaded;
+    await session.connect();
+    await assert.rejects(session.handlers.setGrindSetting('501'), /AdjustmentOwner decaid/);
+    const brew = async (id, record) => {
+      shots[id] = record;
+      plugin.onEvent({name: 'shotStored', payload: {id}});
+      await until(async () => (await session.diagnostics('control')).body.lastBrewEvent?.shotId === id, 'brew event ' + id);
+      return (await session.diagnostics('control')).body.lastBrewEvent;
+    };
+    assert.equal((await brew('before-grind', shotRecord(Date.now(), 30, 36))).reason, 'no successful grind within 5 min before the shot');
+    await session.handlers.start();
+    await until(() => last(session).state === 'grinding', 'grinding');
+    await session.handlers.stop();
+    await until(() => last(session).state === 'idle', 'idle');
+    await until(async () => (await session.diagnostics('grind-events')).body.events[0]?.grindUuid, 'grind log uuid');
+    const [grind] = (await session.diagnostics('grind-events')).body.events;
+    assert.deepEqual(grind.recipe, {index: 1, uuid: '00000000-0000-4000-8000-000000000001', mode: 'GbW', type: 'Espresso, double',
+      amountGr: 18, setting: '50', brewTimeMs: 27000, brewWeightGr: 36});
+    assert.deepEqual([grind.log.setting, grind.log.grindWeightGr, grind.log.successful], ['500', 18, true]);
+    assert.equal((await brew('short', shotRecord(Date.now() + 1000, 9, 36))).reason, 'shot not longer than 10 s');
+    assert.equal((await brew('stale', shotRecord(Date.now() + 6 * 60000, 28, 36))).reason, 'no successful grind within 5 min before the shot');
+    const linked = await brew('linked', shotRecord(Date.now() - 30000, 28, 36.4)); // grind ended 30 s after shot start: clock-skew tolerance
+    assert.deepEqual([linked.status, linked.reason], ['sent', null]);
+    assert.equal((await session.diagnostics('grind-events')).body.events[0].linkedShotId, 'linked');
+    assert.deepEqual((await control(sim, '/sim/state')).lastBrewEvent, {grindUuid: grind.grindUuid, machineName: 'Decent DE1', groupHead: '1',
+      doseIndex: 0, validity: true, brewTimeMs: 28000, brewWeightMg: 36400});
+    assert.equal((await brew('second', shotRecord(Date.now() + 2000, 28, 36))).reason, 'no successful grind within 5 min before the shot', 'one shot per grind');
+  });
+});
+
+test('an older host without binary fetch keeps grind events without a uuid', (t) => {
+  const cert = makeCert();
+  return withSim(t, {tlsCert: cert, httpsCert: cert, devGate: 'open'}, async (sim, keep) => {
+    const shots = {};
+    const {session, plugin} = keep(await loadPlugin(controlSettings(sim, cert, {AdjustmentOwner: 'grinder'}), {shots, binaryFetch: false}));
+    await session.connect();
+    await session.handlers.start();
+    await until(() => last(session).state === 'grinding', 'grinding');
+    await session.handlers.stop();
+    await until(async () => (await session.diagnostics('grind-events')).body.log.status === 'unsupported-host', 'feature detection');
+    shots.linked = shotRecord(Date.now() + 1000, 28, 36);
+    plugin.onEvent({name: 'shotStored', payload: {id: 'linked'}});
+    await until(async () => (await session.diagnostics('control')).body.lastBrewEvent?.shotId === 'linked', 'brew event');
+    assert.equal((await session.diagnostics('control')).body.lastBrewEvent.reason, 'grind uuid unavailable');
+    assert.equal((await control(sim, '/sim/state')).lastBrewEvent, null);
+  });
+});
+
+test('the replayed real grind is matched to its grind-log row', (t) => {
+  const cert = makeCert();
+  return withSim(t, {tlsCert: cert, httpsCert: cert, replay: replayTrace}, async (sim, keep) => {
+    const {session} = keep(await loadPlugin({InstancesJson: instance(sim, {restPort: sim.httpPort, certSha256: cert.sha256}), TokensJson: '{}',
+      MintTokens: 'true', PasswordsJson: password('sim-password')}));
+    await session.connect();
+    await control(sim, '/sim/replay/seek', {t: 28});
+    await until(() => last(session).state === 'grinding', 'replayed grind');
+    await control(sim, '/sim/replay/seek', {t: 38});
+    await until(async () => (await session.diagnostics('grind-events')).body.events[0]?.grindUuid, 'replayed grind enriched', 8000);
+    const [event] = (await session.diagnostics('grind-events')).body.events;
+    assert.equal(event.setting, '82');
+    assert.equal(event.log.setting, '82', 'grind_ddd 819 shown as 82');
+    assert.equal(event.recipe.mode, 'GbW');
+  }, replayTrace);
 });
