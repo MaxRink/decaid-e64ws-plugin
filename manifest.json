@@ -1,9 +1,9 @@
 {
   "id": "mahlkoenig-e64.reaplugin",
-  "name": "Mahlk\u00f6nig E64",
+  "name": "Mahlkönig E64",
   "author": "Decaid contributors",
-  "description": "Read-only Mahlk\u00f6nig E64 grinder telemetry over WebSocket.",
-  "version": "0.6.0",
+  "description": "Read-only Mahlkönig E64 grinder telemetry over WebSocket.",
+  "version": "0.7.0",
   "apiVersion": 1,
   "permissions": [
     "api",
@@ -53,78 +53,175 @@
       ]
     }
   ],
+  "surfaces": [
+    {
+      "id": "setup",
+      "role": "setup",
+      "endpoint": "setup",
+      "label": "Set up"
+    },
+    {
+      "id": "diagnostics",
+      "role": "diagnostics",
+      "endpoint": "e64-diagnostics",
+      "label": "E64 diagnostics"
+    }
+  ],
   "settings": {
     "InstancesJson": {
       "type": "string",
       "label": "E64 instances",
       "description": "JSON array of id, name, host, port, optional scheme (wss by default, ws allowed), optional pollMs, optional certSha256 (pinned SHA-256 of the E64 certificate) and optional restPort (login HTTPS port, default 443). Hosts must be loopback, private, link-local or .local.",
-      "default": "[]"
+      "default": "[]",
+      "hidden": true
     },
     "TokensJson": {
       "type": "string",
       "label": "E64 session tokens",
       "description": "JSON object mapping instance ids to {\"host\": <instance host>, \"token\": <token>}. An entry is only used while the instance host matches.",
       "secure": true,
-      "default": "{}"
+      "default": "{}",
+      "hidden": true
     },
     "MintTokens": {
       "type": "enum",
-      "values": ["false", "true"],
+      "values": [
+        "false",
+        "true"
+      ],
       "label": "Mint tokens on connect",
       "description": "When true, empty TokensJson entries are filled by logging in on each connect. Requires PasswordsJson or AllowNoPasswordWorkaround.",
-      "default": "false"
+      "default": "false",
+      "hidden": true,
+      "valueLabels": {
+        "true": "On",
+        "false": "Off"
+      }
     },
     "PasswordsJson": {
       "type": "string",
       "label": "E64 Owner passwords",
       "description": "JSON object mapping instance ids to {\"host\": <instance host>, \"password\": <Owner password>}. Stored as a secure setting and never logged; re-enter it after changing the instance host.",
       "secure": true,
-      "default": "{}"
+      "default": "{}",
+      "hidden": true
     },
     "AllowNoPasswordWorkaround": {
       "type": "enum",
-      "values": ["false", "true"],
+      "values": [
+        "false",
+        "true"
+      ],
       "label": "Allow no-password workaround",
       "description": "Use the documented FW-01 SELECT-only login construction when no Owner password is set. This is an authentication bypass; enable only on an owner-controlled device. Default false.",
-      "default": "false"
+      "default": "false",
+      "hidden": true,
+      "valueLabels": {
+        "true": "On",
+        "false": "Off"
+      },
+      "advanced": true
     },
     "AllowControl": {
       "type": "enum",
-      "values": ["false", "true"],
+      "values": [
+        "false",
+        "true"
+      ],
       "label": "Allow grinder control",
       "description": "Probe once per load whether the grinder runs an owner-enabled development image; only then register start/stop and grind-setting control. Locked grinders stay read-only. Requires MintTokens. See docs/DEBUG_MODE.md. Default false.",
-      "default": "false"
+      "default": "false",
+      "valueLabels": {
+        "true": "On",
+        "false": "Off"
+      },
+      "advanced": true
     },
     "SyncBacklight": {
       "type": "enum",
-      "values": ["false", "true"],
+      "values": [
+        "false",
+        "true"
+      ],
       "label": "Sync grinder backlight",
       "description": "With control available, turn the grinder backlight off while the espresso machine sleeps and back on when it wakes. Default false.",
-      "default": "false"
+      "default": "false",
+      "valueLabels": {
+        "true": "On",
+        "false": "Off"
+      },
+      "advanced": true
     },
     "AdjustmentOwner": {
       "type": "enum",
-      "values": ["off", "grinder", "decaid"],
+      "values": [
+        "off",
+        "grinder",
+        "decaid"
+      ],
       "label": "Grind adjustment owner",
       "description": "off: no brew events and no grind-setting writes. grinder: report finished Decaid shots to the grinder's own grind-by-sync as brew events. decaid: allow grind-setting writes from Decaid, never send brew events. Default off.",
-      "default": "off"
+      "default": "off",
+      "valueLabels": {
+        "off": "Just show the grinder",
+        "grinder": "Let the grinder adjust itself",
+        "decaid": "Let Decaid adjust the grinder"
+      }
     },
     "PopulateGrinderRecord": {
       "type": "enum",
-      "values": ["true", "false"],
+      "values": [
+        "true",
+        "false"
+      ],
       "label": "Add the grinder to Decaid's inventory",
       "description": "On connect, keep one Decaid grinder record per instance (created once, or an existing E64 record adopted). Only plugin-owned extras are updated afterwards; an archived record is left alone. Default true.",
-      "default": "true"
+      "default": "true",
+      "valueLabels": {
+        "true": "On",
+        "false": "Off"
+      }
     },
     "LinkWorkflowGrinder": {
       "type": "enum",
-      "values": ["true", "false"],
+      "values": [
+        "true",
+        "false"
+      ],
       "label": "Link the workflow to this grinder",
       "description": "When the current workflow names no grinder, set its grinder to this record. An existing grinder choice is never replaced. Default true.",
-      "default": "true"
+      "default": "true",
+      "valueLabels": {
+        "true": "On",
+        "false": "Off"
+      }
+    },
+    "SyncWorkflowGrinder": {
+      "type": "enum",
+      "values": [
+        "true",
+        "false"
+      ],
+      "label": "Keep the workflow's grinder details current",
+      "description": "While this grinder is the workflow's grinder, keep its model and burrs from the grinder record, its setting equal to the grinder's display (not during a shot, and not over a value you set in the last 10 minutes unless the dial moved), and grind metadata under context.extras. Default true.",
+      "default": "true",
+      "valueLabels": {
+        "true": "On",
+        "false": "Off"
+      }
     }
   },
   "api": [
+    {
+      "id": "setup",
+      "type": "http",
+      "data": {}
+    },
+    {
+      "id": "ui",
+      "type": "http",
+      "data": {}
+    },
     {
       "id": "grind-events",
       "type": "http",

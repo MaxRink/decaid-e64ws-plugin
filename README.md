@@ -83,6 +83,23 @@ and ran the plugin through a WebSocket harness, not Decaid's host transport.
 Multiple instances have independent sockets and protocol state, but Decaid
 currently selects one connected Grinder for workflows.
 
+## Setup
+
+Open **Decaid > Settings > Plugins > Mahlkönig E64 > Set up** (the plugin's
+`setup` page; `ui?view=setup` is an alias for skins). A fresh install, or a
+configuration that no longer validates, loads in a "needs setup" state with a
+Decaid notice instead of failing, so the assistant is always reachable. It walks
+through the grinder's address (local network only), trusting its certificate
+(one tap for the standard E64 certificate; any other fingerprint must be
+entered and confirmed twice), the Owner password with a test login (at most one
+attempt every 3 s, nothing stored until you save), how Decaid and the grinder
+work together, optional grinder control, and a review. Saving writes the
+existing settings once through Decaid's settings route and then shows the live
+status. The raw JSON settings are hidden from Decaid's settings form; the
+no-password workaround stays available as an advanced setting and is not offered
+by the assistant. Decaid has no network search for plugins yet, so the address
+is entered by hand. `GET <diagnostics>?ui=1` shows the diagnostics as a page.
+
 ## Grind events
 
 When the grinder's state leaves the grind cycle (`Grind`, `GbwPostGrind` and the
@@ -160,6 +177,33 @@ one Decaid grinder record per instance, so stored shots name this grinder:
 instance owns, for example after a reload raced a creation; the oldest is used and
 none is deleted) and `lastError`. The
 grind-events response includes `grinderId`.
+
+## Shot metadata
+
+Decaid copies the active workflow into each shot when it is stored, so with
+`SyncWorkflowGrinder` (default `"true"`) the plugin keeps the workflow's grinder
+fields current while this grinder is the workflow's grinder (or links it when the
+workflow names none and `LinkWorkflowGrinder` allows it):
+
+- `grinderModel` and `grinderBurrs` follow the Decaid grinder record, read again
+  before every write, so your edits to the record win;
+- `grinderSetting` follows the grinder's display (for example `"83"`) once the
+  reading has been stable for 3 s. A value the plugin did not write, such as a
+  planned setting you or another plugin entered, is kept for 10 minutes unless
+  the dial moves away from the reading it had when that value appeared.
+  Streamline's "Follow Grinder" writes the same value, which needs no write;
+- `context.extras["mahlkoenig-e64.reaplugin"]` holds `ddValueDum`,
+  `displayedSetting`, `unit` and `lastGrind` (completion time, target and result
+  weight, motor run time, and the mode `GbW`/`GbT` when the grind states showed
+  it), updated once per completed grind. Decaid's workflow update merges
+  `extras` deeply, so other plugins' keys are untouched.
+
+Writes are partial `PUT /api/v1/workflow` calls that contain only the changed
+fields. There is at most one every 3 seconds, none while the espresso machine is
+pulling a shot, steaming, dispensing hot water or flushing (deferred until it is
+done), and none when nothing changed, so plugins reacting to `workflowUpdated`
+are not driven into a loop. With `SyncWorkflowGrinder` `"false"` the plugin only
+links an empty workflow, as `LinkWorkflowGrinder` did in 0.6.
 
 ## Grinder control
 
@@ -240,7 +284,7 @@ See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
 
 ## Installation
 
-Version 0.6.0 requires a Decaid build containing the read-only Grinder observation
+Version 0.7.0 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and the plugin `notifications` permission (#1003), and tracks upstream Decaid
 `main` (verified against `1d74fbf7` on 2026-11-23), in addition to runtime-v2 and validated device
 surfaces. `certSha256` pinning needs a host with `tlsPinSha256` support; older hosts ignore it. The stable `0.8.8` release has not been

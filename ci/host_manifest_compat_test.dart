@@ -14,7 +14,7 @@ void main() {
       expect(path, isNotNull);
       final package = resolvePluginPackage(Directory(path!));
       expect(package.manifest.id, 'mahlkoenig-e64.reaplugin');
-      expect(package.manifest.version, '0.6.0');
+      expect(package.manifest.version, '0.7.0');
       final drivers = {
         for (final driver in package.manifest.drivers) driver.id: driver,
       };

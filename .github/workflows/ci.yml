@@ -48,6 +48,16 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:http
+      - name: Setup assistant in a browser (phone and tablet, both themes)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:ui
+      - name: Check the vendored plugin-ui kit
+        env:
+          KIT: https://raw.githubusercontent.com/MaxRink/streamline-js/f814285874bc2c7a6e8790fae5ce3762dffbf8bb/docs/plugin-ui
+        run: |
+          curl --fail --silent --show-error --location "$KIT/vendor.mjs" --output "$RUNNER_TEMP/vendor.mjs"
+          node "$RUNNER_TEMP/vendor.mjs" check plugin.js "$KIT"
       - name: Upload Playwright artifacts
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

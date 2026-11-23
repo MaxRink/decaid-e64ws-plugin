@@ -12,6 +12,8 @@ import 'package:reaprime/src/plugins/plugin_manager.dart';
 import 'package:reaprime/src/plugins/plugin_manifest.dart';
 import 'package:reaprime/src/services/storage/kv_store_service.dart';
 import 'package:reaprime/src/models/data/grinder.dart';
+import 'package:reaprime/src/models/data/json_utils.dart';
+import 'package:reaprime/src/models/data/workflow_context.dart';
 import 'package:reaprime/src/services/storage/grinder_storage_service.dart';
 import 'package:reaprime/src/services/webserver/grinders_handler.dart';
 import 'package:shelf/shelf_io.dart' as shelf_io;
@@ -210,7 +212,11 @@ void main() {
       // PUT /api/v1/workflow, and one shot record.
       final grinders = _MemoryGrinders();
       var workflow = <String, dynamic>{
-        'context': {'targetYield': 36, 'grinderSetting': '82'},
+        'context': {
+          'targetYield': 36,
+          'grinderSetting': '82',
+          'extras': {'dialin': {'plan': 'keep'}},
+        },
         'profile': {'title': 'Adaptive'},
       };
       final shotStart = DateTime.now().toUtc().add(const Duration(minutes: 2));
@@ -220,13 +226,9 @@ void main() {
           headers: {'content-type': 'application/json'}));
       app.put('/api/v1/workflow', (Request request) async {
         final patch = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
-        workflow = {
-          ...workflow,
-          for (final entry in patch.entries)
-            entry.key: entry.value is Map
-                ? {...?(workflow[entry.key] as Map<String, dynamic>?), ...entry.value as Map<String, dynamic>}
-                : entry.value,
-        };
+        // The host's own merge, and its context model must accept the result.
+        workflow = deepMergeJson(workflow, patch);
+        WorkflowContext.fromJson(workflow['context'] as Map<String, dynamic>);
         return Response.ok(jsonEncode(workflow), headers: {'content-type': 'application/json'});
       });
       app.get('/api/v1/shots/shot-1', (Request _) => Response.ok(jsonEncode({
@@ -282,7 +284,10 @@ void main() {
             'query': {'deviceId': deviceId, 'read': 'inventory'},
           });
           final inventory = jsonDecode(read['body'] as String) as Map<String, dynamic>;
-          if (inventory['workflowLink'] != null) return;
+          if (inventory['workflowLink'] == 'linked' ||
+              inventory['workflowLink'] == 'kept-existing') {
+            return;
+          }
           expect(DateTime.now().isBefore(deadline), isTrue, reason: 'inventory sync: $inventory');
           await Future<void>.delayed(const Duration(milliseconds: 100));
         }
@@ -411,13 +416,26 @@ void main() {
       expect(records.single.model, 'Mahlkönig E64 WS');
       expect(records.single.extras?['source'], 'mahlkoenig-e64.reaplugin');
       expect(records.single.extras?['deviceId'], owner.deviceId);
-      expect(workflow['context'], {
-        'targetYield': 36,
-        'grinderSetting': '82',
-        'grinderId': records.single.id,
-        'grinderModel': 'Mahlkönig E64 WS',
-      });
-      expect(workflow['profile'], {'title': 'Adaptive'});
+      // A shot stores a copy of the active workflow: it carries the grinder.
+      final metaDeadline = DateTime.now().add(const Duration(seconds: 15));
+      while (((workflow['context'] as Map)['extras'] as Map?)?['mahlkoenig-e64.reaplugin'] == null) {
+        expect(DateTime.now().isBefore(metaDeadline), isTrue, reason: 'pre-shot metadata: $workflow');
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      }
+      final shot = jsonDecode(jsonEncode(workflow)) as Map<String, dynamic>;
+      final context = WorkflowContext.fromJson(shot['context'] as Map<String, dynamic>);
+      expect(context.grinderId, records.single.id);
+      expect(context.grinderModel, 'Mahlkönig E64 WS');
+      expect(context.grinderBurrs, '64 mm flat (stock)');
+      expect(context.grinderSetting, matches(RegExp(r'^\d+$')));
+      expect(context.targetYield, 36);
+      final extras = context.extras!;
+      expect(extras['dialin'], {'plan': 'keep'});
+      final meta = extras['mahlkoenig-e64.reaplugin'] as Map<String, dynamic>;
+      expect(meta['unit'], 'µm');
+      expect(meta['displayedSetting'], matches(RegExp(r'^\d+$')));
+      expect((meta['lastGrind'] as Map)['targetWeightGr'], 18);
+      expect(shot['profile'], {'title': 'Adaptive'});
       expect(brew['brewTimeMs'], 28000);
       expect(brew['brewWeightMg'], 36400);
       await settleInventory(owner.deviceId);

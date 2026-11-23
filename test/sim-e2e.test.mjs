@@ -75,7 +75,7 @@ test('password minting over pinned https and wss', (t) => {
     assert.equal(connection.tokenSource, 'password');
     assert.equal(JSON.stringify(connection).includes('sim-password'), false);
     assert.equal(JSON.stringify(connection).includes(sim.token), false);
-    assert.deepEqual(notices, [['dismiss', 'login-sim']]);
+    assert.deepEqual(notices.filter(([, value]) => value !== 'setup'), [['dismiss', 'login-sim']]);
   });
 });
 
@@ -120,8 +120,9 @@ test('failed logins raise a notice and back off without contacting the simulator
     const connection = (await session.diagnostics('connection')).body;
     assert.equal(connection.lastMintError, 'login HTTP 400');
     assert.equal(typeof connection.mintBackoffUntil, 'string');
-    assert.equal(notices[0][0], 'notify');
-    assert.equal(notices[0][1].message.includes('wrong-password'), false);
+    const login = notices.filter(([kind]) => kind === 'notify');
+    assert.equal(login[0][1].id, 'login-sim');
+    assert.equal(login[0][1].message.includes('wrong-password'), false);
   });
 });
 
@@ -330,11 +331,12 @@ test('connecting fills the Decaid grinder inventory and the empty workflow grind
   const [record] = decaid.grinders;
   assert.equal(record.model, 'Mahlkönig E64 WS');
   assert.deepEqual(record.extras.deviceId, 'plugin:mahlkoenig-e64.reaplugin:e64:sim');
-  assert.deepEqual(decaid.workflow, {context: {targetYield: 36, grinderSetting: '82', grinderId: record.id, grinderModel: 'Mahlkönig E64 WS'}, profile: {title: 'Adaptive'}});
+  assert.deepEqual(decaid.workflow, {context: {targetYield: 36, grinderSetting: '82', grinderId: record.id, grinderModel: 'Mahlkönig E64 WS',
+    grinderBurrs: '64 mm flat (stock)'}, profile: {title: 'Adaptive'}}, 'the planned setting 82 is kept; the dial reads 500');
   assert.equal((await session.diagnostics('grind-events')).body.grinderId, record.id);
   await session.disconnect();
   await session.connect();
-  const listed = () => decaid.calls.filter((call) => call.method === 'GET' && call.path.startsWith('/api/v1/grinders')).length;
+  const listed = () => decaid.calls.filter((call) => call.method === 'GET' && call.path.startsWith('/api/v1/grinders?')).length;
   await until(() => listed() === 2 && decaid.calls.at(-1).path === '/api/v1/workflow', 'second sync');
   assert.equal(decaid.grinders.length, 1, 'the reconnect finds its own record');
   assert.equal(decaid.calls.filter((call) => call.method !== 'GET').length, 2, 'only the first sync wrote');
@@ -365,5 +367,56 @@ test('the service log comes from the same coalesced download, redacted and incre
     const [newest, older] = (await session.diagnostics('grind-events')).body.events;
     assert.ok(older.grindUuid, 'the first grind is enriched by the immediate download');
     assert.equal(newest.grindUuid, null, 'the second grind waits for the next coalesced download, 10 minutes later');
+  });
+});
+
+test('a shot snapshot of the active workflow carries the full grinder metadata', (t) => withSim(t, {replay: replayTrace}, async (sim, keep) => {
+  const decaid = decaidApi({workflow: {context: {targetYield: 36, extras: {dialin: {plan: 'keep'}}}, profile: {title: 'Adaptive'}}});
+  const {session} = keep(await loadPlugin({InstancesJson: instance(sim, {scheme: 'ws'}), TokensJson: token(sim.token)}, {decaid}));
+  await session.connect();
+  await control(sim, '/sim/replay/seek', {t: 28});
+  await until(() => last(session).state === 'grinding', 'replayed grind');
+  await control(sim, '/sim/replay/seek', {t: 35});
+  await until(() => last(session).state === 'unknown', 'GbwPostGrind observed');
+  await control(sim, '/sim/replay/seek', {t: 38});
+  await until(() => decaid.workflow.context.extras?.['mahlkoenig-e64.reaplugin']?.lastGrind, 'pre-shot metadata', 10000);
+  const shot = JSON.parse(JSON.stringify(decaid.workflow)); // Decaid snapshots the active workflow at shot completion
+  const [record] = decaid.grinders;
+  assert.deepEqual({grinderId: shot.context.grinderId, grinderModel: shot.context.grinderModel, grinderBurrs: shot.context.grinderBurrs, grinderSetting: shot.context.grinderSetting},
+    {grinderId: record.id, grinderModel: 'Mahlkönig E64 WS', grinderBurrs: '64 mm flat (stock)', grinderSetting: '82'});
+  const meta = shot.context.extras['mahlkoenig-e64.reaplugin'];
+  assert.deepEqual([meta.ddValueDum, meta.displayedSetting, meta.unit, meta.lastGrind.mode], [819, '82', 'µm', 'GbW']);
+  assert.deepEqual(shot.context.extras.dialin, {plan: 'keep'});
+  assert.equal(shot.context.targetYield, 36);
+  assert.ok(decaid.workflowWrites <= 3, `few workflow writes (${decaid.workflowWrites})`);
+}, replayTrace));
+
+test('a full setup-assistant run against the simulator ends connected', (t) => {
+  const cert = makeCert();
+  return withSim(t, {tlsCert: cert, httpsCert: cert, devGate: 'open'}, async (sim, keep) => {
+    // A fresh install loads in needs-setup and serves the assistant.
+    const fresh = await loadPlugin({});
+    const call = async (plugin, body) => { const r = await plugin.handleHttpRequest({endpoint: 'setup', method: 'POST', query: {}, body}); return JSON.parse(r.body); };
+    assert.equal(JSON.parse(fresh.plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}).body).needsSetup, true);
+    const target = {host: '127.0.0.1', port: sim.port, restPort: sim.httpPort};
+    // The simulator's certificate is not the E64 fleet certificate: the page asks for the fingerprint (path C).
+    assert.deepEqual(await call(fresh.plugin, {action: 'probe-cert', ...target}), {recognised: false});
+    const pin = cert.sha256;
+    assert.equal((await call(fresh.plugin, {action: 'test-login', ...target, certSha256: pin, password: 'sim-password'})).result, 'accepted');
+    await new Promise((resolve) => setTimeout(resolve, 3100));
+    const probe = await call(fresh.plugin, {action: 'probe-control', ...target, certSha256: pin, password: 'sim-password'});
+    assert.deepEqual([probe.result, probe.debugMode], ['accepted', 'available']);
+    const settings = {InstancesJson: JSON.stringify([{id: 'e64', name: 'Mahlkönig E64', scheme: 'wss', ...target, pollMs: 100, certSha256: pin}]),
+      TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({e64: {host: '127.0.0.1', password: 'sim-password'}}),
+      AdjustmentOwner: 'decaid', AllowControl: 'true', SyncBacklight: 'false', PopulateGrinderRecord: 'true', LinkWorkflowGrinder: 'true'};
+    assert.deepEqual((await call(fresh.plugin, {action: 'check', settings})).errors, []);
+    await fresh.plugin.onUnload();
+    // Saving reloads the plugin with the new settings.
+    const {session, plugin} = keep(await loadPlugin(settings));
+    assert.equal(session.driverId, 'e64-control');
+    await session.connect();
+    await until(() => JSON.parse(plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}).body).instances[0].displayedSetting === '500', 'status shows the display');
+    const status = JSON.parse(plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}).body);
+    assert.deepEqual([status.needsSetup, status.instances[0].connected, status.instances[0].debugMode], [false, true, 'available']);
   });
 });

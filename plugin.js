@@ -1,5 +1,8 @@
 function createPlugin(host) {
   "use strict";
+  /* plugin-ui:begin */
+const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065dda587f38d2c8130c5d37dce9950134ec","js":"749c8fd79583c4fdebc357cfcf1532a13bb61f7b495ed40dd323550f8e32b676"},"css":":root{--pu-bg:#fff;--pu-surface:#f6f8fa;--pu-text:#121212;--pu-muted:#5f6368;--pu-border:#c9c9c9;--pu-accent:#385a92;--pu-link:#385a92;--pu-on-accent:#fff;--pu-scheme:light;--pu-ok:#0a8a6c;--pu-warn:#b26a00;--pu-danger:#c62828;--pu-radius:12px;--pu-tap:56px;--pu-row:48px}\n:root[data-theme=dark]{--pu-bg:#101217;--pu-surface:#17191e;--pu-text:#e8e8e8;--pu-muted:#959595;--pu-border:#3d4255;--pu-accent:#415996;--pu-link:#9db4ee;--pu-scheme:dark;--pu-ok:#0ca581;--pu-warn:#e0a030;--pu-danger:#ef5350}\n@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--pu-bg:#101217;--pu-surface:#17191e;--pu-text:#e8e8e8;--pu-muted:#959595;--pu-border:#3d4255;--pu-accent:#415996;--pu-link:#9db4ee;--pu-scheme:dark;--pu-ok:#0ca581;--pu-warn:#e0a030;--pu-danger:#ef5350}}\n*,*::before,*::after{box-sizing:border-box}\nbody.pu{margin:0;background:var(--pu-bg);color:var(--pu-text);font:18px/1.4 system-ui,\"Inter\",-apple-system,\"Segoe UI\",Roboto,sans-serif;-webkit-text-size-adjust:100%}\n[data-embed] body.pu{background:transparent}\n.pu [hidden]{display:none!important}\n.pu-page{max-width:46rem;margin:0 auto;padding:16px;background:var(--pu-bg);border-radius:var(--pu-radius)}\n.pu h1{font-size:24px;margin:0}.pu h2{font-size:20px;margin:0 0 8px}.pu p{margin:0 0 12px}\n.pu a{color:var(--pu-link)}\n.pu-muted,.pu-hint{color:var(--pu-muted);font-size:16px}\n.pu-header{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:var(--pu-tap);margin-bottom:12px}\n[data-embed] [data-pu-done]{display:none}\n.pu-card{background:var(--pu-surface);border:1px solid var(--pu-border);border-radius:var(--pu-radius);padding:16px;margin:0 0 16px}\n.pu-row{display:grid;gap:4px 16px;align-items:center;min-height:var(--pu-row);padding:8px 0;border-top:1px solid var(--pu-border)}\n.pu-row:first-child{border-top:0}\n@media (min-width:600px){.pu-row{grid-template-columns:minmax(10rem,1fr) minmax(0,1.4fr)}.pu-row>.pu-hint{grid-column:1/-1}}\n.pu label{font-weight:600}\n.pu input:not([type=checkbox]):not([type=radio]),.pu select,.pu textarea{width:100%;min-height:var(--pu-row);padding:10px 12px;font:inherit;color:var(--pu-text);background:var(--pu-bg);border:1px solid var(--pu-border);border-radius:8px;color-scheme:var(--pu-scheme)}\n.pu textarea{min-height:8rem;font-family:ui-monospace,monospace;font-size:15px}\n.pu :focus-visible{outline:3px solid var(--pu-accent);outline-offset:2px}\n.pu-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:var(--pu-tap);padding:0 28px;font:inherit;font-weight:700;border-radius:999px;border:2px solid var(--pu-accent);background:var(--pu-accent);color:var(--pu-on-accent);cursor:pointer;text-decoration:none}\n.pu-btn.pu-secondary{background:transparent;color:var(--pu-link)}\n.pu-btn.pu-danger{background:var(--pu-danger);border-color:var(--pu-danger)}\n.pu-btn:disabled{opacity:.45;cursor:not-allowed}\n.pu-actions{display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;padding:12px 0}\n.pu-actions.pu-sticky{position:sticky;bottom:0;background:var(--pu-bg);border-top:1px solid var(--pu-border)}\n.pu-switch{appearance:none;flex:none;width:72px;height:40px;margin:8px 0;border-radius:999px;background:var(--pu-border);position:relative;cursor:pointer;transition:background .15s}\n.pu-switch::after{content:\"\";position:absolute;top:4px;left:4px;width:32px;height:32px;border-radius:50%;background:#fff;transition:transform .15s}\n.pu-switch:checked{background:var(--pu-accent)}.pu-switch:checked::after{transform:translateX(32px)}\n.pu-choice{display:grid;gap:12px;margin:0;padding:0;border:0}\n.pu-choice label{display:flex;gap:12px;align-items:flex-start;min-height:var(--pu-tap);padding:14px 16px;border:2px solid var(--pu-border);border-radius:var(--pu-radius);cursor:pointer;font-weight:400}\n.pu-choice label:has(input:checked){border-color:var(--pu-accent)}\n.pu-choice label:has(input:disabled){opacity:.5;cursor:not-allowed}\n.pu-choice input{width:24px;height:24px;margin:2px 0 0;accent-color:var(--pu-accent);color-scheme:var(--pu-scheme);flex:none}\n.pu-choice b{display:block}\n.pu-stepper{display:flex;align-items:center;gap:8px;margin:0 0 16px;color:var(--pu-muted);font-size:16px}\n.pu-stepper i{width:10px;height:10px;border-radius:50%;background:var(--pu-border)}\n.pu-stepper i.on{background:var(--pu-accent)}\n.pu-pill{display:inline-flex;align-items:center;min-height:32px;padding:2px 12px;border-radius:999px;font-size:15px;font-weight:600;border:1px solid currentColor;color:var(--pu-muted)}\n.pu-pill.pu-ok{color:var(--pu-ok)}.pu-pill.pu-warn{color:var(--pu-warn)}.pu-pill.pu-error{color:var(--pu-danger)}\n.pu-alert{padding:12px 16px;margin:0 0 16px;border-radius:var(--pu-radius);border-left:6px solid var(--pu-accent);background:var(--pu-surface)}\n.pu-alert.pu-ok{border-color:var(--pu-ok)}.pu-alert.pu-warn{border-color:var(--pu-warn)}.pu-alert.pu-error{border-color:var(--pu-danger)}\n.pu-code{display:block;padding:12px;font:15px/1.6 ui-monospace,monospace;background:var(--pu-bg);border:1px solid var(--pu-border);border-radius:8px;overflow-wrap:anywhere}\n.pu-secure{display:flex;gap:8px}.pu-secure input{flex:1}.pu-secure .pu-btn{padding:0 16px}\ndetails.pu-details{margin:0 0 16px}details.pu-details>summary{min-height:var(--pu-row);display:flex;align-items:center;cursor:pointer;font-weight:600;color:var(--pu-link)}\n@media (prefers-reduced-motion:reduce){.pu *{transition:none!important}}\n","js":"(function () {\n  \"use strict\";\n  var q = new URLSearchParams(location.search), root = document.documentElement;\n  var lang = (q.get(\"lang\") || \"en\").toLowerCase().split(\"-\")[0];\n  var strings = {de: {Back: \"Zurück\", Next: \"Weiter\", Done: \"Fertig\", Show: \"Anzeigen\", Hide: \"Verbergen\", \"Step {n} of {m}\": \"Schritt {n} von {m}\"}};\n  var embedded = q.get(\"embed\") === \"1\", fit = false;\n  var parentPost = function (msg) { if (window.parent !== window) window.parent.postMessage(msg, \"*\"); };\n  var pu = {\n    lang: lang, embedded: embedded, params: q,\n    t: function (key, vars) {\n      var s = (strings[lang] && strings[lang][key]) || key;\n      return s.replace(/\\{(\\w+)\\}/g, function (_, k) { return vars && k in vars ? vars[k] : \"{\" + k + \"}\"; });\n    },\n    init: function (opts) {\n      opts = opts || {};\n      Object.keys(opts.strings || {}).forEach(function (l) { strings[l] = Object.assign(strings[l] || {}, opts.strings[l]); });\n      document.querySelectorAll(\"[data-pu-t]\").forEach(function (el) { el.textContent = pu.t(el.getAttribute(\"data-pu-t\")); });\n      fit = Boolean(opts.fit) && embedded;\n      parentPost({type: \"streamline:ready\"});\n      if (fit) { pu.size(); if (window.ResizeObserver) new ResizeObserver(pu.size).observe(document.querySelector(\".pu-page\") || document.body); }\n    },\n    size: function () {\n      if (!fit) return;\n      var r = (document.querySelector(\".pu-page\") || document.body).getBoundingClientRect();\n      parentPost({type: \"streamline:size\", width: Math.ceil(r.width), height: Math.ceil(r.height)});\n    },\n    done: async function () {\n      if (window.parent !== window) return parentPost({type: \"streamline:close\"});\n      var bridge = window.flutter_inappwebview;\n      if (bridge && bridge.callHandler) return bridge.callHandler(\"pluginSurface\", {type: \"close\"});\n      var target = q.get(\"returnTo\"), skin = null, path = q.get(\"return\");\n      try {\n        if (!target && path && /^\\/(?![\\/\\\\])/.test(path)) {\n          var s = await (await fetch(\"/api/v1/webui/server/status\")).json();\n          if (s.serving && Number.isInteger(s.port)) { skin = new URL(location.href); skin.port = String(s.port); target = new URL(path, skin.origin).href; }\n        }\n        if (target) {\n          var u = new URL(target);\n          if (/^https?:$/.test(u.protocol) && u.hostname === location.hostname && !u.username && !u.password && (!skin || u.origin === skin.origin)) return location.assign(u.href);\n        }\n      } catch (e) { target = null; }\n      history.back();\n    },\n    api: async function (path, opts) {\n      opts = opts || {};\n      var res = await fetch(path, {method: opts.method || (opts.body === undefined ? \"GET\" : \"POST\"),\n        headers: opts.body === undefined ? {} : {\"Content-Type\": \"application/json\"},\n        body: opts.body === undefined ? undefined : JSON.stringify(opts.body)});\n      var data = null; try { data = await res.json(); } catch (e) { data = null; }\n      if (!res.ok) { var err = new Error((data && data.error) || \"HTTP \" + res.status); err.status = res.status; err.data = data; throw err; }\n      return data;\n    },\n    secureValue: function (input, wasSet) {\n      if (input.value) return input.value;\n      return wasSet ? {isSet: true} : undefined;\n    },\n    fingerprint: function (hex) {\n      return String(hex).replace(/[^0-9a-f]/gi, \"\").toUpperCase().replace(/(..)(?!$)/g, \"$1:\");\n    },\n    wizard: function (container, onNext) {\n      var steps = Array.prototype.slice.call(container.querySelectorAll(\"[data-pu-step]\")), i = 0;\n      var back = container.querySelector(\"[data-pu-back]\"), next = container.querySelector(\"[data-pu-next]\"), bar = container.querySelector(\"[data-pu-stepper]\");\n      function show(n) {\n        i = n;\n        steps.forEach(function (s, k) { s.hidden = k !== i; });\n        if (back) back.disabled = i === 0;\n        if (next) next.hidden = i === steps.length - 1;\n        if (bar) bar.innerHTML = steps.map(function (_, k) { return \"<i class=\\\"\" + (k <= i ? \"on\" : \"\") + \"\\\"></i>\"; }).join(\"\") + \"<span></span>\";\n        if (bar) bar.lastChild.textContent = pu.t(\"Step {n} of {m}\", {n: i + 1, m: steps.length});\n        var h = steps[i].querySelector(\"h2\"); if (h) { h.tabIndex = -1; h.focus(); }\n        pu.size();\n      }\n      if (back) back.addEventListener(\"click\", function () { if (i > 0) show(i - 1); });\n      if (next) next.addEventListener(\"click\", async function () {\n        next.disabled = true;\n        try { if (!onNext || (await onNext(i, steps[i])) !== false) show(Math.min(i + 1, steps.length - 1)); } finally { next.disabled = false; }\n      });\n      show(0);\n      return {show: show, get index() { return i; }};\n    }\n  };\n  var theme = q.get(\"theme\");\n  if (theme === \"light\" || theme === \"dark\") root.setAttribute(\"data-theme\", theme);\n  if (embedded) root.setAttribute(\"data-embed\", \"\");\n  root.lang = lang;\n  document.addEventListener(\"click\", function (e) {\n    var b = e.target.closest && e.target.closest(\"[data-pu-reveal]\");\n    if (b) {\n      var input = b.parentNode.querySelector(\"input\");\n      var hidden = input.type === \"password\";\n      input.type = hidden ? \"text\" : \"password\";\n      b.textContent = pu.t(hidden ? \"Hide\" : \"Show\");\n      b.setAttribute(\"aria-pressed\", String(hidden));\n    }\n    if (e.target.closest && e.target.closest(\"[data-pu-done]\")) pu.done();\n  });\n  window.pu = pu;\n})();\n"};
+/* plugin-ui:end */
   const MAX = 8, TIMEOUT = 5000, MAX_PENDING = 32, MINT_BACKOFF_MS = 5000, MINT_BACKOFF_MAX_MS = 300000;
   const idPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
   const commands = {
@@ -259,6 +262,8 @@ function createPlugin(host) {
     const allowControl = jsonSetting(settings, "AllowControl", false);
     const populateGrinder = jsonSetting(settings, "PopulateGrinderRecord", true);
     const linkWorkflow = jsonSetting(settings, "LinkWorkflowGrinder", true);
+    const syncWorkflow = jsonSetting(settings, "SyncWorkflowGrinder", true);
+    if (typeof syncWorkflow !== "boolean") fail("SyncWorkflowGrinder must be true or false");
     if (typeof populateGrinder !== "boolean" || typeof linkWorkflow !== "boolean") fail("PopulateGrinderRecord and LinkWorkflowGrinder must be true or false");
     const syncBacklight = jsonSetting(settings, "SyncBacklight", false);
     const owner = settings && settings.AdjustmentOwner !== undefined ? settings.AdjustmentOwner : "off";
@@ -290,7 +295,7 @@ function createPlugin(host) {
       if (mintTokens && !token && !password && !allowNoPassword) fail("MintTokens needs a password or AllowNoPasswordWorkaround for " + id);
       ids.add(id);
       return {id, name, scheme, host: row.host, port: row.port, pollMs, token, certSha256, restPort,
-        password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner, populateGrinder, linkWorkflow};
+        password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner, populateGrinder, linkWorkflow, syncWorkflow};
     });
     if (Object.keys(tokens).some((id) => !ids.has(id))) fail("TokensJson contains an unknown id");
     if (Object.keys(passwords).some((id) => !ids.has(id))) fail("PasswordsJson contains an unknown id");
@@ -490,11 +495,14 @@ function createPlugin(host) {
       grindEvents: [], lastGrindState: null,
       grindLog: {status: config.mintTokens ? "idle" : "needs-mint-tokens", lastAt: null, lastAttemptAt: null, lastError: null, failures: 0, nextAt: null, dueAt: null},
       serviceRows: [], logTimer: null, restToken: null, restCookie: null,
-      inventory: {status: config.populateGrinder ? "pending" : "disabled", grinderId: null, model: null, archived: false, workflowLink: null, duplicates: 0, lastSyncAt: null, lastError: null}};
+      inventory: {status: config.populateGrinder ? "pending" : "disabled", grinderId: null, model: null, archived: false, workflowLink: null, duplicates: 0, lastSyncAt: null, lastError: null},
+      workflow: {enabled: config.populateGrinder && config.syncWorkflow, lastWriteAt: null, lastWriteMs: 0, lastWritten: null, lastError: null, writes: 0,
+        display: null, displayAt: 0, ddValueDum: null, meta: null, override: null}, workflowTimer: null};
   }
   function clear(instance) {
     if (instance.poll !== null) clearTimeout(instance.poll); instance.poll = null; clearTimeout(instance.observationExpiry); instance.observationExpiry = null;
     if (instance.logTimer !== null) clearTimeout(instance.logTimer); instance.logTimer = null; instance.grindLog.dueAt = null;
+    if (instance.workflowTimer !== null) clearTimeout(instance.workflowTimer); instance.workflowTimer = null;
   }
   function rejectAll(instance, reason) { for (const item of instance.pending.values()) { clearTimeout(item.timer); item.reject(new Error(reason)); } instance.pending.clear(); }
   function schedule(instance, epoch) {
@@ -532,6 +540,7 @@ function createPlugin(host) {
         }, TIMEOUT);
       }
       trackGrind(instance, message.data, snapshot.observedSetting);
+      noteSetting(instance, snapshot.observedSetting, message.data.ddValueDum);
       instance.context.publish(snapshot).then(item.resolve, item.reject);
     } else if (item.name === "action") {
       if (!message.data || typeof message.data !== "object" || Array.isArray(message.data)) { item.reject(new Error("E64 invalid action response")); return; }
@@ -616,13 +625,84 @@ function createPlugin(host) {
     const now = typeof data.grindState === "string" ? data.grindState.toLowerCase() : null;
     const was = instance.lastGrindState;
     instance.lastGrindState = now;
+    // GbW/GbT phases name the grind mode; a plain Grind state does not.
+    if (now && GRIND_STATES.includes(now) && /^gb[wt]/.test(now)) instance.grindMode = now.startsWith("gbw") ? "GbW" : "GbT";
     if (!was || !GRIND_STATES.includes(was) || (now && GRIND_STATES.includes(now))) return;
+    const mode = instance.grindMode || null;
+    instance.grindMode = null;
     const finite = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
     instance.grindEvents.unshift({grindUuid: null, completedAt: new Date().toISOString(), completedAtMs: Date.now(),
       targetWeightGr: finite(data.grindTargetWeightGr), resultWeightGr: finite(data.grindResultWeightGr),
       motorRunTimeMs: finite(data.motorRunTimeMs), setting: setting === undefined ? null : setting, linkedShotId: null});
     instance.grindEvents.length = Math.min(instance.grindEvents.length, MAX_GRIND_EVENTS);
     queueLogDownload(instance, 0);
+    const grind = instance.grindEvents[0];
+    instance.workflow.meta = {ddValueDum: Number.isSafeInteger(data.ddValueDum) ? data.ddValueDum : null, displayedSetting: grind.setting, unit: "µm",
+      lastGrind: {completedAt: grind.completedAt, targetWeightGr: grind.targetWeightGr, resultWeightGr: grind.resultWeightGr,
+        motorRunTimeMs: grind.motorRunTimeMs, mode}};
+    scheduleWorkflowSync(instance, 0);
+  }
+  // --- Active workflow: grinder model, burrs, setting and pre-shot metadata ---
+  // Decaid copies the active workflow into each shot, so keeping its context
+  // current is how shots carry this grinder. Writes are rare and only on change.
+  const WORKFLOW_MIN_MS = 3000, SETTING_STABLE_MS = 3000, USER_HOLD_MS = 10 * 60000;
+  const ACTIVE_STATES = ["espresso", "steam", "hotWater", "flush"];
+  let machineActive = false;
+  function noteSetting(instance, display, ddValueDum) {
+    const wf = instance.workflow;
+    if (display === undefined || display === wf.display) return;
+    wf.display = display; wf.ddValueDum = ddValueDum; wf.displayAt = Date.now();
+    scheduleWorkflowSync(instance, SETTING_STABLE_MS);
+  }
+  function scheduleWorkflowSync(instance, delayMs) {
+    const wf = instance.workflow;
+    if (!wf.enabled || !instance.connected || instance.inventory.grinderId === null) return;
+    const due = Math.max(Date.now() + delayMs, wf.lastWriteMs + WORKFLOW_MIN_MS, wf.displayAt + SETTING_STABLE_MS);
+    if (instance.workflowTimer !== null) clearTimeout(instance.workflowTimer);
+    instance.workflowTimer = setTimeout(() => { instance.workflowTimer = null; syncWorkflow(instance).catch(() => {}); }, Math.max(0, due - Date.now()));
+  }
+  // Returns the workflow link state: linked, kept-existing (another grinder is chosen) or deferred.
+  async function syncWorkflow(instance) {
+    const wf = instance.workflow, inventory = instance.inventory, config = instance.config;
+    if (!wf.enabled || inventory.grinderId === null || inventory.archived) return "disabled";
+    if (machineActive) return "deferred";
+    if (Date.now() - wf.lastWriteMs < WORKFLOW_MIN_MS || (wf.display !== null && Date.now() - wf.displayAt < SETTING_STABLE_MS)) {
+      scheduleWorkflowSync(instance, 0); return "deferred";
+    }
+    try {
+      const record = await api("GET", "/api/v1/grinders/" + encodeURIComponent(inventory.grinderId));
+      const workflow = await api("GET", "/api/v1/workflow");
+      const context = workflow && workflow.context && typeof workflow.context === "object" ? workflow.context : {};
+      const ours = context.grinderId === record.id;
+      if (!ours && (context.grinderId || context.grinderModel || !config.linkWorkflow)) return (inventory.workflowLink = "kept-existing");
+      inventory.workflowLink = "linked";
+      const patch = {};
+      if (!ours) patch.grinderId = record.id;
+      // The grinder record is the user's: its model and burrs win.
+      if (typeof record.model === "string" && context.grinderModel !== record.model) patch.grinderModel = record.model;
+      if (typeof record.burrs === "string" && record.burrs && context.grinderBurrs !== record.burrs) patch.grinderBurrs = record.burrs;
+      if (wf.display !== null && context.grinderSetting !== wf.display) {
+        const current = typeof context.grinderSetting === "string" ? context.grinderSetting : null;
+        let allow = true;
+        // A value the plugin did not write is a user's (or Streamline's) choice: keep it
+        // for 10 minutes unless the dial moves away from the reading it had then.
+        if (current !== null && current !== wf.lastWritten) {
+          if (!wf.override || wf.override.value !== current) wf.override = {value: current, at: Date.now(), dial: wf.display};
+          allow = Date.now() - wf.override.at >= USER_HOLD_MS || wf.display !== wf.override.dial;
+        }
+        if (allow) patch.grinderSetting = wf.display;
+      }
+      const existing = context.extras && typeof context.extras === "object" ? context.extras[PLUGIN_ID] : undefined;
+      if (wf.meta && JSON.stringify(existing) !== JSON.stringify(wf.meta)) patch.extras = {[PLUGIN_ID]: wf.meta};
+      if (!Object.keys(patch).length) return "linked";
+      await api("PUT", "/api/v1/workflow", {context: patch});
+      if (patch.grinderSetting !== undefined) { wf.lastWritten = patch.grinderSetting; wf.override = null; }
+      Object.assign(wf, {lastWriteAt: new Date().toISOString(), lastWriteMs: Date.now(), lastError: null, writes: wf.writes + 1});
+      return "linked";
+    } catch (error) {
+      wf.lastError = error && /HTTP|returned/.test(error.message) ? error.message : "workflow request failed";
+      return "error";
+    }
   }
   // Machine logs (download_machine_logs ZIP): after completed grinds, coalesced to
   // at most one download per 10 minutes, plus one idle refresh per 6 hours for
@@ -743,9 +823,14 @@ function createPlugin(host) {
   async function probeDebugMode(instance) {
     const control = instance.control, config = instance.config;
     if (!config.mintTokens) { control.debugMode = "unprobed-static-token"; return; }
+    let token;
+    try { token = await mintToken(instance); } catch (_) { control.debugMode = "unknown"; control.probedAt = new Date().toISOString(); return; }
+    await probeWithToken(instance, token);
+  }
+  async function probeWithToken(instance, token) {
+    const control = instance.control, config = instance.config;
     let handle = null;
     try {
-      const token = await mintToken(instance);
       const pin = config.scheme === "wss" && config.certSha256 ? {tlsPinSha256: config.certSha256} : {};
       handle = (await host.transport.open({kind: "websocket", url: url(config, token), ...pin})).handle;
       control.debugMode = await new Promise((resolve) => {
@@ -898,7 +983,7 @@ function createPlugin(host) {
         }
       }
       Object.assign(inventory, {grinderId: record.id, model: record.model, archived: false, lastError: null, lastSyncAt: new Date().toISOString()});
-      inventory.workflowLink = config.linkWorkflow ? await linkWorkflow(record) : "disabled";
+      inventory.workflowLink = instance.workflow.enabled ? await syncWorkflow(instance) : config.linkWorkflow ? await linkWorkflow(record) : "disabled";
     } catch (error) {
       Object.assign(inventory, {status: "error", lastError: error && /HTTP|returned/.test(error.message) ? error.message : "inventory request failed"});
     } finally {
@@ -962,10 +1047,284 @@ function createPlugin(host) {
       instance.transport.send(instance.handle, {type: "text", data: JSON.stringify({type: command[0], msgId: id, data: payload || {}})}).catch(() => { if (instance.pending.delete(id)) { clearTimeout(item.timer); reject(new Error("E64 request failed")); } });
     });
   }
+  // --- Setup assistant and HTML pages (plugin-ui kit) ------------------------
+  // The standard E64 web certificate: every unit ships the same one (see docs/CERTIFICATE_TRUST.md).
+  const FLEET_SHA256 = "91b412ee014f21c3bb2445430b6a3d77903334a1300ad84f1980ab2c5f53620b";
+  const SETUP_TEST_MS = 3000;
+  let needsSetup = null, lastSetupTest = 0;
+  function setupNotice(message) {
+    try {
+      if (message === null) host.dismissNotification("setup");
+      else host.notify({id: "setup", message: "Mahlkönig E64 needs setup: " + message + " Open Decaid > Settings > Plugins > Mahlkönig E64 > Set up."});
+    } catch (_) {}
+  }
+  function validate(settings) {
+    try {
+      const configs = configuration(settings);
+      return {errors: configs.length ? [] : ["No grinder is configured yet."], configs};
+    } catch (error) {
+      return {errors: [String(error.message).replace(/^E64 configuration error: /, "")], configs: []};
+    }
+  }
+  const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"})[c]);
+  function htmlPage(title, body, script) {
+    return {status: 200, headers: {"Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store"},
+      body: "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>" +
+        escapeHtml(title) + "</title><style>" + PLUGIN_UI.css + "</style><body class=\"pu\"><main class=\"pu-page\" id=\"page\">" + body +
+        "</main><script>" + PLUGIN_UI.js + "</script><script>" + script + "</script></body></html>"};
+  }
+  function setupStatus() {
+    return {needsSetup: needsSetup !== null, message: needsSetup, instances: Array.from(instances.values()).map((instance) => ({
+      id: instance.config.id, name: instance.config.name, deviceId: instance.deviceId, connected: instance.connected,
+      displayedSetting: instance.workflow.display, debugMode: instance.control.debugMode, inventory: instance.inventory.status}))};
+  }
+  // Setup actions never persist anything; the page saves once through the host's settings route.
+  async function setupAction(body) {
+    const draft = body && typeof body === "object" ? body : {};
+    if (draft.action === "check") return {status: 200, payload: {errors: validate(draft.settings).errors}};
+    const hostValue = typeof draft.host === "string" ? draft.host.trim() : "";
+    if (!validHost(hostValue)) return {status: 400, payload: {error: "host", message: "Use the grinder's address on your local network."}};
+    const restPort = draft.restPort === undefined ? 443 : draft.restPort;
+    if (!Number.isInteger(restPort) || restPort < 1 || restPort > 65535) return {status: 400, payload: {error: "restPort"}};
+    const target = {host: hostValue, restPort};
+    if (draft.action === "probe-cert") {
+      // Path A: recognise the fleet certificate by pinning it; anything else must be pasted and confirmed.
+      try {
+        await fetch(restUrl(target, "ping"), {method: "GET", tlsPinSha256: FLEET_SHA256});
+        return {status: 200, payload: {recognised: true, certSha256: FLEET_SHA256}};
+      } catch (_) {
+        return {status: 200, payload: {recognised: false}};
+      }
+    }
+    if (draft.action === "test-login" || draft.action === "probe-control") {
+      if (Date.now() - lastSetupTest < SETUP_TEST_MS) return {status: 429, payload: {result: "wait", message: "Wait a moment before trying again."}};
+      lastSetupTest = Date.now();
+      const pin = typeof draft.certSha256 === "string" ? draft.certSha256.replace(/:/g, "").toLowerCase() : "";
+      if (!/^[0-9a-f]{64}$/.test(pin)) return {status: 400, payload: {error: "certSha256"}};
+      let password = typeof draft.password === "string" ? draft.password : "";
+      if (!password) {
+        const saved = Array.from(instances.values()).find((instance) => instance.config.host.toLowerCase() === hostValue.toLowerCase() && instance.config.password);
+        password = saved ? saved.config.password : "";
+      }
+      if (!password || password.length > 1024) return {status: 400, payload: {result: "no-password", message: "Enter the Owner password."}};
+      let response;
+      try {
+        response = await fetch(restUrl(target, "login"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({userRole: "Owner", password}), tlsPinSha256: pin});
+      } catch (_) {
+        return {status: 200, payload: {result: "unreachable", message: "Grinder not reachable, or its certificate changed."}};
+      }
+      const auth = response && response.ok && response.headers && response.headers.get ? response.headers.get("authorization") || "" : "";
+      if (!auth.startsWith("Bearer ")) return {status: 200, payload: {result: response && response.ok ? "unexpected" : "wrong-password", message: "The grinder did not accept this password."}};
+      if (draft.action === "test-login") return {status: 200, payload: {result: "accepted", message: "Password accepted."}};
+      const port = Number.isInteger(draft.port) ? draft.port : 9997;
+      const probe = {control: {debugMode: "unknown", probedAt: null}, config: {mintTokens: true, scheme: "wss", host: hostValue, port, certSha256: pin, restPort}};
+      const token = auth.slice(7).trim();
+      await probeWithToken(probe, token);
+      return {status: 200, payload: {result: "accepted", debugMode: probe.control.debugMode}};
+    }
+    return {status: 400, payload: {error: "action"}};
+  }
+  function setupPage() {
+    return htmlPage("Set up the Mahlkönig E64", `
+<header class="pu-header"><h1>Set up the Mahlkönig E64</h1><button type="button" class="pu-btn pu-secondary" data-pu-done>Done</button></header>
+<div class="pu-stepper" data-pu-stepper></div>
+<section data-pu-step>
+  <h2>Before you start</h2>
+  <p>Decaid will read the grinder's setting and show it with your shots. Optionally it can report shots to the grinder. It is read-only unless you choose otherwise.</p>
+  <p>You need the grinder on the same network as this device and its Owner password.</p>
+</section>
+<section data-pu-step hidden>
+  <h2>Find your grinder</h2>
+  <div class="pu-card"><div class="pu-row"><label for="host">Address</label>
+    <input id="host" inputmode="url" autocomplete="off" spellcheck="false" placeholder="192.168.1.40">
+    <p class="pu-hint">The grinder's IP address on your local network. Decaid cannot search the network for it yet.</p></div></div>
+  <details class="pu-details"><summary>Advanced</summary><div class="pu-card">
+    <div class="pu-row"><label for="name">Name</label><input id="name" autocomplete="off" value="Mahlkönig E64"></div>
+    <div class="pu-row"><label for="port">WebSocket port</label><input id="port" inputmode="numeric" value="9997"></div>
+    <div class="pu-row"><label for="restPort">Login port</label><input id="restPort" inputmode="numeric" value="443"></div></div></details>
+  <div id="hostOut" class="pu-alert pu-error" hidden></div>
+</section>
+<section data-pu-step hidden>
+  <h2>Trust the grinder's certificate</h2>
+  <div id="certOk" class="pu-alert pu-ok" hidden><span class="pu-pill pu-ok">Recognised</span> Standard Mahlkönig E64 certificate.</div>
+  <div id="certUnknown" class="pu-alert pu-warn" hidden><span class="pu-pill pu-warn">Check</span> This is not the usual E64 certificate, or the grinder did not answer. Continue only if you just set up this grinder or its firmware changed.</div>
+  <code class="pu-code" id="fp"></code>
+  <div class="pu-card" id="pasteCard" hidden><div class="pu-row"><label for="paste">Certificate SHA-256</label>
+    <input id="paste" autocomplete="off" spellcheck="false" placeholder="91:B4:12:…"></div></div>
+  <div class="pu-actions"><button type="button" class="pu-btn" id="trust">Trust this grinder</button></div>
+  <details class="pu-details"><summary>What this means</summary><p>Pinning stops Decaid from talking to other servers and keeps the password away from anything that is not an E64. It does not prove this is your grinder, because every E64 shares one certificate. Decaid therefore only accepts local-network addresses and binds the password to this address.</p></details>
+  <div id="certOut" class="pu-alert" hidden></div>
+</section>
+<section data-pu-step hidden>
+  <h2>Owner password</h2>
+  <div class="pu-card"><div class="pu-row"><label for="password">Password</label>
+    <div class="pu-secure"><input id="password" type="password" autocomplete="off" spellcheck="false"><button type="button" class="pu-btn pu-secondary" data-pu-reveal aria-pressed="false">Show</button></div>
+    <p class="pu-hint" id="pwHint">The grinder's Owner password.</p></div></div>
+  <div class="pu-actions"><button type="button" class="pu-btn pu-secondary" id="test">Test login</button></div>
+  <div id="pwOut" class="pu-alert" hidden></div>
+</section>
+<section data-pu-step hidden>
+  <h2>How Decaid and the grinder work together</h2>
+  <fieldset class="pu-choice"><legend class="pu-muted">Pick one. You can change it later.</legend>
+    <label><input type="radio" name="owner" value="off" checked><span><b>Just show the grinder</b>Decaid shows the grinder's setting. Nothing is sent to the grinder.</span></label>
+    <label><input type="radio" name="owner" value="grinder"><span><b>Let the grinder adjust itself</b>After each shot Decaid tells the grinder's own grind-by-sync how the shot went. The grinder decides any change.</span></label>
+    <label><input type="radio" name="owner" value="decaid" id="ownerDecaid" disabled><span><b>Let Decaid adjust the grinder</b><span id="decaidReason">Needs grinder control, checked in the next step.</span></span></label>
+  </fieldset>
+  <div class="pu-card">
+    <div class="pu-row"><label for="populate">Add this grinder to my grinders</label><input id="populate" type="checkbox" role="switch" class="pu-switch" checked></div>
+    <div class="pu-row"><label for="link">Use it in my current workflow</label><input id="link" type="checkbox" role="switch" class="pu-switch" checked></div></div>
+</section>
+<section data-pu-step hidden>
+  <h2>Grinder control (optional)</h2>
+  <details class="pu-details" id="controlDetails"><summary>Grinder control</summary>
+    <p>Some owners run a development image on their grinder that accepts control commands. Decaid checks this by itself; on a normal grinder Decaid stays read-only. This plugin does not explain how to enable such an image.</p>
+    <div class="pu-card"><div class="pu-row"><label for="allowControl">Allow grinder control</label><input id="allowControl" type="checkbox" role="switch" class="pu-switch"></div>
+      <div class="pu-row" id="backlightRow" hidden><label for="syncBacklight">Turn the grinder's light off while the machine sleeps</label><input id="syncBacklight" type="checkbox" role="switch" class="pu-switch"></div></div>
+    <div class="pu-actions"><button type="button" class="pu-btn pu-secondary" id="probe">Check the grinder</button></div>
+    <div id="probeOut" class="pu-alert" hidden></div>
+  </details>
+</section>
+<section data-pu-step hidden>
+  <h2>Review and save</h2>
+  <div class="pu-card" id="summary"></div>
+  <div class="pu-actions"><button type="button" class="pu-btn" id="save">Save</button></div>
+  <div id="saveOut" class="pu-alert" hidden aria-live="polite"></div>
+</section>
+<div class="pu-actions pu-sticky"><button type="button" class="pu-btn pu-secondary" data-pu-back>Back</button><button type="button" class="pu-btn" data-pu-next>Next</button></div>`,
+SETUP_SCRIPT);
+  }
+  const SETUP_SCRIPT = `
+pu.init({fit: true});
+const base = location.pathname.replace(/\\/[^/]*$/, "");
+const $ = (id) => document.getElementById(id);
+const state = {certSha256: null, previousHost: null, passwordSet: false, instanceId: "e64", loginOk: false, control: null};
+const say = (el, kind, text) => { el.hidden = !text; el.className = "pu-alert pu-" + kind; el.textContent = text || ""; };
+const post = (body) => pu.api(base + "/setup", {method: "POST", body}).catch((e) => e.data || {result: "error", message: String(e.message)});
+async function load() {
+  try {
+    const settings = await pu.api(base + "/settings");
+    const rows = JSON.parse(settings.InstancesJson || "[]");
+    if (rows[0]) {
+      const row = rows[0];
+      state.instanceId = row.id; state.previousHost = row.host;
+      $("host").value = row.host || ""; $("name").value = row.name || "Mahlkönig E64";
+      $("port").value = row.port || 9997; $("restPort").value = row.restPort || 443;
+      if (row.certSha256) state.certSha256 = row.certSha256.replace(/:/g, "").toLowerCase();
+    }
+    state.passwordSet = Boolean(settings.PasswordsJson && settings.PasswordsJson.isSet);
+    const owner = document.querySelector('input[name=owner][value="' + (settings.AdjustmentOwner || "off") + '"]');
+    if (owner && !owner.disabled) owner.checked = true;
+    $("populate").checked = settings.PopulateGrinderRecord !== "false";
+    $("link").checked = settings.LinkWorkflowGrinder !== "false";
+    $("allowControl").checked = settings.AllowControl === "true";
+    $("syncBacklight").checked = settings.SyncBacklight === "true";
+    $("backlightRow").hidden = !$("allowControl").checked;
+  } catch (_) {}
+  passwordHint();
+}
+const hostChanged = () => state.previousHost !== null && state.previousHost.toLowerCase() !== $("host").value.trim().toLowerCase();
+function passwordHint() {
+  $("pwHint").textContent = state.passwordSet && !hostChanged() ? "Password saved. Leave empty to keep it." :
+    state.passwordSet ? "The address changed, so enter the password again: it is bound to the grinder's address." : "The grinder's Owner password.";
+}
+const target = () => ({host: $("host").value.trim(), port: Number($("port").value), restPort: Number($("restPort").value)});
+async function probeCert() {
+  $("certOk").hidden = $("certUnknown").hidden = $("pasteCard").hidden = true;
+  const result = await post({action: "probe-cert", ...target()});
+  if (result.recognised) { $("certOk").hidden = false; $("fp").textContent = pu.fingerprint(result.certSha256); state.offered = result.certSha256; }
+  else { $("certUnknown").hidden = false; $("pasteCard").hidden = false; $("fp").textContent = ""; state.offered = null; }
+}
+$("trust").addEventListener("click", () => {
+  const pasted = $("paste").value.replace(/:/g, "").trim().toLowerCase();
+  const pin = state.offered || pasted;
+  if (!/^[0-9a-f]{64}$/.test(pin)) return say($("certOut"), "error", "Enter the 64-character SHA-256 fingerprint.");
+  if (!state.offered && !$("trust").dataset.confirm) { $("trust").dataset.confirm = "1"; $("trust").textContent = "Trust anyway"; return say($("certOut"), "warn", "Tap again to trust this certificate."); }
+  state.certSha256 = pin; say($("certOut"), "ok", "Trusted: " + pu.fingerprint(pin));
+});
+$("allowControl").addEventListener("change", () => { $("backlightRow").hidden = !$("allowControl").checked; });
+$("host").addEventListener("input", passwordHint);
+$("test").addEventListener("click", async () => {
+  const result = await post({action: "test-login", ...target(), certSha256: state.certSha256, password: $("password").value});
+  state.loginOk = result.result === "accepted";
+  say($("pwOut"), state.loginOk ? "ok" : "error", result.message || "Login failed.");
+});
+$("probe").addEventListener("click", async () => {
+  const result = await post({action: "probe-control", ...target(), certSha256: state.certSha256, password: $("password").value});
+  state.control = result.debugMode || null;
+  const ok = state.control === "available";
+  $("ownerDecaid").disabled = !ok;
+  $("decaidReason").textContent = ok ? "Decaid may set the grind setting, for example from assisted dial-in. No shot reports are sent to the grinder." : "Needs grinder control, which this grinder does not offer.";
+  say($("probeOut"), ok ? "ok" : "warn", ok ? "Control is available on this grinder." : result.message || "This grinder does not accept control commands; Decaid stays read-only.");
+});
+function draft() {
+  const owner = document.querySelector("input[name=owner]:checked").value;
+  const t = target();
+  const instance = {id: state.instanceId, name: $("name").value.trim() || "Mahlkönig E64", scheme: "wss", host: t.host, port: t.port, restPort: t.restPort, pollMs: 1000, certSha256: state.certSha256};
+  const typed = $("password").value;
+  const settings = {InstancesJson: JSON.stringify([instance]), TokensJson: "{}", MintTokens: "true",
+    AdjustmentOwner: owner, PopulateGrinderRecord: String($("populate").checked), LinkWorkflowGrinder: String($("link").checked),
+    AllowControl: String($("allowControl").checked), SyncBacklight: String($("allowControl").checked && $("syncBacklight").checked)};
+  if (typed) settings.PasswordsJson = JSON.stringify({[state.instanceId]: {host: t.host, password: typed}});
+  else if (state.passwordSet && !hostChanged()) settings.PasswordsJson = {isSet: true};
+  return settings;
+}
+function summary() {
+  const s = draft(), owner = document.querySelector("input[name=owner]:checked").closest("label").querySelector("b").textContent;
+  const rows = [["Grinder", $("host").value.trim()], ["Certificate", state.certSha256 ? pu.fingerprint(state.certSha256) : "not trusted"],
+    ["Password", $("password").value ? "new" : state.passwordSet && !hostChanged() ? "kept" : "missing"], ["Decaid and the grinder", owner],
+    ["Add to my grinders", s.PopulateGrinderRecord === "true" ? "yes" : "no"], ["Grinder control", s.AllowControl === "true" ? "allowed" : "off"]];
+  $("summary").replaceChildren(...rows.map(([k, v]) => { const row = document.createElement("div"); row.className = "pu-row"; const a = document.createElement("b"); a.textContent = k; const b = document.createElement(k === "Certificate" ? "code" : "span"); if (k === "Certificate") b.className = "pu-code"; b.textContent = v; row.append(a, b); return row; }));
+}
+pu.wizard($("page"), async (index) => {
+  if (index === 1) {
+    const host = $("host").value.trim();
+    if (!host) { say($("hostOut"), "error", "Enter the grinder's address."); return false; }
+    const check = await post({action: "probe-cert", ...target()});
+    if (check.error === "host") { say($("hostOut"), "error", check.message); return false; }
+    say($("hostOut"), "error", ""); passwordHint(); await probeCert(); return true;
+  }
+  if (index === 2 && !state.certSha256) { say($("certOut"), "error", "Trust the certificate to continue."); return false; }
+  if (index === 3 && !$("password").value && !(state.passwordSet && !hostChanged())) { say($("pwOut"), "error", "Enter the Owner password."); return false; }
+  if (index === 5) summary();
+  return true;
+});
+$("save").addEventListener("click", async () => {
+  const settings = draft();
+  const check = await post({action: "check", settings: {...settings, PasswordsJson: typeof settings.PasswordsJson === "string" ? settings.PasswordsJson : JSON.stringify({[state.instanceId]: {host: target().host, password: "kept"}})}});
+  if (check.errors && check.errors.length) return say($("saveOut"), "error", check.errors[0]);
+  try { await pu.api(base + "/settings", {method: "POST", body: settings}); }
+  catch (e) { return say($("saveOut"), "error", e.status === 401 ? "Finish this in Decaid: extension protection is on." : "Saving failed."); }
+  $("password").value = "";
+  say($("saveOut"), "warn", "Saved. Connecting…");
+  const started = Date.now();
+  const poll = async () => {
+    let status = null;
+    try { status = await pu.api(base + "/setup?status=1"); } catch (_) {}
+    const instance = status && status.instances && status.instances[0];
+    if (status && status.needsSetup) return say($("saveOut"), "error", status.message);
+    if (instance && instance.displayedSetting) return say($("saveOut"), "ok", "Connected, display shows " + instance.displayedSetting + " µm.");
+    if (Date.now() - started < 60000) setTimeout(poll, 1000); else say($("saveOut"), "warn", "Saved. Connect the grinder in Decaid's device list.");
+  };
+  setTimeout(poll, 1000);
+});
+load();
+`;
+  function diagnosticsPage(instance) {
+    const {syncing, ...inventory} = instance.inventory;
+    const rows = [["Connected", instance.connected ? "yes" : "no"], ["Display", instance.workflow.display === null ? "–" : instance.workflow.display + " µm"],
+      ["Token", instance.tokenSource], ["Last login error", instance.lastMintError || "–"], ["Grinder record", inventory.status],
+      ["Workflow", inventory.workflowLink || "–"], ["Grind log", instance.grindLog.status], ["Control", instance.control.debugMode],
+      ["Adjustment owner", instance.control.owner], ["Grind events", String(instance.grindEvents.length)]];
+    return htmlPage("E64 diagnostics", "<header class=\"pu-header\"><h1>" + escapeHtml(instance.config.name) + "</h1><button type=\"button\" class=\"pu-btn pu-secondary\" data-pu-done>Done</button></header><div class=\"pu-card\">" +
+      rows.map(([k, v]) => "<div class=\"pu-row\"><b>" + escapeHtml(k) + "</b><span>" + escapeHtml(v) + "</span></div>").join("") + "</div>", "pu.init({fit: true});");
+  }
   const plugin = {
     id: "mahlkoenig-e64.reaplugin",
     onLoad(settings) {
-      const configs = configuration(settings);
+      // Invalid or missing configuration loads in a "needs setup" state so the setup page is served.
+      const {errors, configs} = validate(settings);
+      needsSetup = errors.length ? errors[0] : null;
+      setupNotice(needsSetup);
       return Promise.all(configs.map(async (config) => {
         const instance = make(config); instances.set(config.id, instance);
         // Control is only registered when the probe proves the grinder accepts it, so a locked grinder stays read-only.
@@ -981,13 +1340,29 @@ function createPlugin(host) {
     onUnload() { return Promise.all(Array.from(instances.values()).map((instance) => disconnect(instance))); },
     onEvent(event) {
       if (!event || !event.payload) return;
-      if (event.name === "stateUpdate") { updateXenia(event.payload); syncBacklight(event.payload); }
+      if (event.name === "stateUpdate") {
+        updateXenia(event.payload); syncBacklight(event.payload);
+        const active = Boolean(event.payload.state && ACTIVE_STATES.includes(event.payload.state.state));
+        if (active !== machineActive) {
+          machineActive = active;
+          // Writes deferred during a shot, steam, hot water or flush run once the machine is done.
+          if (!active) for (const instance of instances.values()) scheduleWorkflowSync(instance, 0);
+        }
+      }
       if (event.name === "shotStored" && typeof event.payload.id === "string") {
         for (const instance of instances.values()) if (instance.control.owner === "grinder" && instance.control.debugMode === "available") brewEvent(instance, event.payload.id);
       }
     },
     handleHttpRequest(request) {
       const jsonResponse = (status, payload) => ({status, headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+      if (request.endpoint === "setup" || request.endpoint === "ui") {
+        const query = request.query || {};
+        if (request.method === "POST" && request.endpoint === "setup") return setupAction(request.body).then(({status, payload}) => jsonResponse(status, payload));
+        if (request.method !== "GET") return jsonResponse(405, {error: "method not allowed"});
+        if (query.status === "1") return jsonResponse(200, setupStatus());
+        if (request.endpoint === "ui" && query.view !== undefined && query.view !== "setup") return jsonResponse(404, {error: "unknown view"});
+        return setupPage();
+      }
       if (request.endpoint === "xenia-mako" || request.endpoint === "xenia-machine" ||
           request.endpoint === "xenia-brewratio" || request.endpoint === "xenia-scripts-execute") {
         if (request.endpoint === "xenia-mako") {
@@ -1038,6 +1413,7 @@ function createPlugin(host) {
       const grindEvents = () => instance.grindEvents.map(({completedAtMs, ...event}) => event);
       if (request.endpoint === "grind-events") return jsonResponse(200, {events: grindEvents(), log: instance.grindLog, grinderId: instance.inventory.grinderId});
       const read = request.query.read;
+      if (read === undefined && request.query.ui === "1") return diagnosticsPage(instance);
       if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "connection" && read !== "xenia" && read !== "control" && read !== "inventory") return jsonResponse(400, {error: "unsupported read"});
       const operation = read === undefined ? null : read;
       if (operation === "xenia") return Promise.resolve(jsonResponse(200, xeniaRead(instance)));

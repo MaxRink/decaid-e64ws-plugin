@@ -15,7 +15,13 @@ function load(settings, fixture, timers = {}, fetchImpl = null) {
   const plugin = sandbox.createPlugin(host);
   // Inventory sync has its own tests; elsewhere it would add a RequestNachineInfo to every connect.
   const effective = settings && !('PopulateGrinderRecord' in settings) ? {...settings, PopulateGrinderRecord: 'false'} : settings;
-  return plugin.onLoad(effective).then(() => ({plugin, registrations}));
+  // Invalid configuration no longer throws; it loads in "needs setup". Surface it as an
+  // error here so the validation tests keep asserting the exact message.
+  return plugin.onLoad(effective).then(() => {
+    const status = JSON.parse(plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}).body);
+    if (status.needsSetup && settings && settings.InstancesJson && settings.InstancesJson !== '[]') throw new Error('E64 configuration error: ' + status.message);
+    return {plugin, registrations};
+  });
 }
 
 test('publishes only sensor-valid raw setting observations from native state responses', async () => {
@@ -658,6 +664,7 @@ test('login uses restPort and raises a notice until a login succeeds', async () 
   vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
   const plugin = sandbox.createPlugin(host);
   await plugin.onLoad({InstancesJson: one('127.0.0.1', {restPort: 8443}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})});
+  assert.deepEqual(notices.splice(0), [['dismiss', 'setup']], 'a valid configuration clears the setup notice');
   const connect = () => registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
   await assert.rejects(connect(), /login HTTP 400/);
   assert.deepEqual(urls, ['https://127.0.0.1:8443/rest_api/login']);
@@ -939,7 +946,7 @@ test('log downloads respect old hosts, suspend after repeated failures and stay 
 async function inventoryRun({decaid = decaidApi(), extra = {}, grinderType = 'E64 WS', connects = 1} = {}) {
   const fetchImpl = hostFetch([], decaid);
   const fixture = {sent: [], events: []};
-  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 0}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}}), PopulateGrinderRecord: 'true', ...extra}, fixture, {}, fetchImpl);
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 0}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}}), PopulateGrinderRecord: 'true', SyncWorkflowGrinder: 'false', ...extra}, fixture, {}, fetchImpl);
   const read = async () => JSON.parse((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'inventory'}})).body);
   for (let i = 0; i < connects; i++) {
     fixture.sent = [];
@@ -1030,4 +1037,177 @@ test('two records owned by the same instance resolve to the oldest without delet
   const run = await inventoryRun({decaid: decaidApi({grinders: [own('newer', '2026-11-23T10:00:00Z'), own('older', '2026-11-20T10:00:00Z')]})});
   assert.deepEqual([run.inventory.grinderId, run.inventory.duplicates, run.decaid.grinders.length], ['older', 1, 2]);
   assert.deepEqual(run.writes.map((call) => call.path), ['/api/v1/workflow']);
+});
+
+async function workflowHarness({workflow = {context: {targetYield: 36, extras: {dialin: {plan: 'keep'}}}, profile: {title: 'P'}}, grinders = []} = {}) {
+  let now = Date.parse('2026-11-23T12:00:00Z');
+  class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
+  const pending = new Map(); let nextTimer = 0;
+  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay, at: now + delay}); return id;}, clearTimeout: id => pending.delete(id), Date: FakeDate};
+  const decaid = decaidApi({workflow, grinders});
+  const fixture = {sent: [], events: []};
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}}), PopulateGrinderRecord: 'true'}, fixture, timers, hostFetch([], decaid));
+  const answeredIds = new Set();
+  let dd = 819, grindState = 'Idle';
+  const respond = () => {
+    fixture.sent.forEach((message, index) => {
+      if (answeredIds.has(message.msgId)) return;
+      answeredIds.add(message.msgId);
+      answer(fixture, index, message.type === 'RequestNachineInfo' ? {grinderType: 'E64 WS'} : {grindState, ddValueDum: dd, ddSensorFailed: false, grindTargetWeightGr: 18, grindResultWeightGr: 18.1, motorRunTimeMs: 8300});
+    });
+  };
+  const settle = async () => { for (let i = 0; i < 12; i++) { await new Promise(resolve => setImmediate(resolve)); respond(); } };
+  const advance = async (ms) => {
+    const end = now + ms;
+    while (true) {
+      const next = [...pending.entries()].filter(([, timer]) => timer.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+      if (!next) break;
+      now = Math.max(now, next[1].at); pending.delete(next[0]); next[1].callback(); await settle();
+    }
+    now = end; await settle();
+  };
+  const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
+  await settle(); await connected; await settle();
+  return {decaid, loaded, advance, setDial: (value) => { dd = value; }, setGrind: (value) => { grindState = value; },
+    context: () => decaid.workflow.context, writes: () => decaid.workflowWrites || 0};
+}
+
+test('the active workflow carries this grinder, debounced and only on change', async () => {
+  const h = await workflowHarness();
+  await h.advance(3500);
+  const record = h.decaid.grinders[0];
+  assert.deepEqual(h.context(), {targetYield: 36, extras: {dialin: {plan: 'keep'}}, grinderId: record.id, grinderModel: 'Mahlkönig E64 WS',
+    grinderBurrs: '64 mm flat (stock)', grinderSetting: '82'});
+  assert.deepEqual(h.decaid.workflow.profile, {title: 'P'});
+  assert.equal(h.writes(), 1, 'link, model, burrs and setting in one write');
+  for (const value of [826, 831, 836]) { h.setDial(value); await h.advance(1000); }
+  assert.equal(h.writes(), 1, 'a moving dial is not written');
+  await h.advance(4000);
+  assert.deepEqual([h.context().grinderSetting, h.writes()], ['84', 2]);
+  await h.advance(60000);
+  assert.equal(h.writes(), 2, 'nothing changed, nothing written');
+  h.context().grinderSetting = '84';
+  record.model = 'My E64'; record.burrs = 'SSP HU 64';
+  h.setDial(845); await h.advance(5000);
+  assert.deepEqual([h.context().grinderModel, h.context().grinderBurrs, h.context().grinderSetting], ['My E64', 'SSP HU 64', '85'], 'record edits win');
+  await h.loaded.plugin.onUnload();
+});
+
+test('workflow writes wait for the machine and respect a user-set grinder setting', async () => {
+  const h = await workflowHarness();
+  await h.advance(3500);
+  const writes = h.writes();
+  h.loaded.plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'espresso', substate: 'pouring'}}});
+  h.setDial(900); await h.advance(10000);
+  assert.equal(h.writes(), writes, 'no writes during a shot');
+  h.loaded.plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'idle', substate: 'idle'}}});
+  await h.advance(4000);
+  assert.deepEqual([h.context().grinderSetting, h.writes()], ['90', writes + 1]);
+
+  h.context().grinderSetting = '75'; // planned by the user (or another plugin)
+  h.setGrind('Grind'); await h.advance(200); h.setGrind('Idle'); await h.advance(4000);
+  assert.equal(h.context().grinderSetting, '75', 'a planned value is kept while the dial has not moved');
+  assert.deepEqual(Object.keys(h.context().extras).sort(), ['dialin', 'mahlkoenig-e64.reaplugin']);
+  assert.deepEqual(h.context().extras.dialin, {plan: 'keep'});
+  const meta = h.context().extras['mahlkoenig-e64.reaplugin'];
+  assert.deepEqual({...meta, lastGrind: {...meta.lastGrind, completedAt: typeof meta.lastGrind.completedAt}}, {ddValueDum: 900, displayedSetting: '90', unit: 'µm',
+    lastGrind: {completedAt: 'string', targetWeightGr: 18, resultWeightGr: 18.1, motorRunTimeMs: 8300, mode: null}}, 'mode only when the grind states show it');
+  h.setDial(755); await h.advance(4000);
+  assert.equal(h.context().grinderSetting, '76', 'the dial moved after the user choice');
+  h.context().grinderSetting = '70';
+  h.setGrind('Grind'); await h.advance(200); h.setGrind('Idle'); await h.advance(4000);
+  assert.equal(h.context().grinderSetting, '70');
+  await h.advance(11 * 60000);
+  h.setGrind('Grind'); await h.advance(200); h.setGrind('Idle'); await h.advance(4000);
+  assert.equal(h.context().grinderSetting, '76', 'after 10 minutes the grinder reading wins again');
+  await h.loaded.plugin.onUnload();
+});
+
+test('another grinder in the workflow is left alone and the same value is never rewritten', async () => {
+  const other = await workflowHarness({workflow: {context: {grinderId: 'other', grinderModel: 'Niche'}}});
+  other.setDial(830); await other.advance(10000);
+  assert.deepEqual([other.writes(), other.context()], [0, {grinderId: 'other', grinderModel: 'Niche'}]);
+  await other.loaded.plugin.onUnload();
+  const same = await workflowHarness();
+  await same.advance(3500);
+  const writes = same.writes();
+  same.context().grinderSetting = '83'; // Streamline "Follow Grinder" wrote the reading first
+  same.setDial(830); await same.advance(5000);
+  assert.equal(same.writes(), writes, 'an equal value needs no write');
+  await same.loaded.plugin.onUnload();
+});
+
+test('missing or invalid configuration loads in needs-setup and serves the setup page', async () => {
+  const notices = [], registrations = [];
+  const host = {notify: (value) => { notices.push(value); }, dismissNotification: () => {}, devices: {register(definition) { registrations.push(definition); return Promise.resolve({deviceId: 'x'}); }}};
+  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent, btoa: globalThis.btoa};
+  vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
+  const plugin = sandbox.createPlugin(host);
+  await plugin.onLoad({InstancesJson: one('8.8.8.8'), TokensJson: '{}', PasswordsJson: JSON.stringify({one: {host: '8.8.8.8', password: 'top-secret'}})});
+  assert.deepEqual(registrations, []);
+  assert.match(notices[0].message, /^Mahlkönig E64 needs setup: instance host must be .* Set up\.$/);
+  const status = JSON.parse(plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}).body);
+  assert.deepEqual([status.needsSetup, status.instances], [true, []]);
+  for (const response of [plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {}}), plugin.handleHttpRequest({endpoint: 'ui', method: 'GET', query: {view: 'setup'}})]) {
+    assert.equal(response.status, 200);
+    assert.match(response.headers['Content-Type'], /^text\/html/);
+    assert.match(response.body, /class="pu"/);
+    assert.ok(response.body.includes('data-pu-step') && response.body.includes('--pu-tap'));
+    assert.equal(response.body.includes('top-secret'), false);
+    assert.equal(/UNION SELECT|no-password|AllowNoPasswordWorkaround/i.test(response.body), false, 'the workaround is not offered');
+  }
+  const check = await plugin.handleHttpRequest({endpoint: 'setup', method: 'POST', query: {}, body: {action: 'check', settings: {InstancesJson: one('192.168.1.40'), TokensJson: '{}', MintTokens: 'true'}}});
+  assert.match(JSON.parse(check.body).errors[0], /MintTokens needs a password/);
+  const bad = await plugin.handleHttpRequest({endpoint: 'setup', method: 'POST', query: {}, body: {action: 'probe-cert', host: 'example.com'}});
+  assert.equal(bad.status, 400);
+});
+
+test('setup probes the certificate and tests the login without storing anything', async () => {
+  let now = 1_000_000, presented = '91b412ee014f21c3bb2445430b6a3d77903334a1300ad84f1980ab2c5f53620b';
+  class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({url, init});
+    if (init.tlsPinSha256 !== presented) throw new Error('HandshakeException');
+    if (url.endsWith('/ping')) return {ok: true, status: 200, headers: {get: () => null}, text: async () => 'expired'};
+    const ok = JSON.parse(init.body).password === 'right';
+    return {ok, status: ok ? 200 : 400, headers: {get: (name) => ok && name === 'authorization' ? 'Bearer t' : null}, text: async () => ''};
+  };
+  const loaded = await load({}, {sent: [], events: []}, {Date: FakeDate}, fetchImpl);
+  const post = async (body) => { const r = await loaded.plugin.handleHttpRequest({endpoint: 'setup', method: 'POST', query: {}, body}); return [r.status, JSON.parse(r.body)]; };
+  assert.deepEqual(await post({action: 'probe-cert', host: '192.168.1.40'}), [200, {recognised: true, certSha256: presented}]);
+  assert.deepEqual(calls[0].url, 'https://192.168.1.40/rest_api/ping');
+  presented = 'ab'.repeat(32);
+  assert.deepEqual(await post({action: 'probe-cert', host: '192.168.1.40', restPort: 8443}), [200, {recognised: false}]);
+  const login = (password) => post({action: 'test-login', host: '192.168.1.40', certSha256: presented, password});
+  assert.equal((await login('wrong'))[1].result, 'wrong-password');
+  assert.deepEqual((await login('right'))[0], 429, 'one attempt every 3 s');
+  now += 3000;
+  assert.equal((await login('right'))[1].result, 'accepted');
+  now += 3000;
+  assert.equal((await post({action: 'test-login', host: '192.168.1.40', certSha256: 'cd'.repeat(32), password: 'right'}))[1].result, 'unreachable');
+  assert.equal(JSON.stringify(calls.map((call) => call.init.body)).includes('right') && JSON.stringify(loaded.plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}).body).includes('right'), false);
+  await loaded.plugin.onUnload();
+});
+
+test('the manifest hides the raw settings and declares the setup surface', async () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  for (const key of ['InstancesJson', 'TokensJson', 'PasswordsJson', 'MintTokens', 'AllowNoPasswordWorkaround']) assert.equal(manifest.settings[key].hidden, true, key);
+  assert.deepEqual(manifest.surfaces.map((surface) => [surface.role, surface.endpoint]), [['setup', 'setup'], ['diagnostics', 'e64-diagnostics']]);
+  assert.ok(manifest.api.some((api) => api.id === 'setup') && manifest.api.some((api) => api.id === 'ui'));
+  assert.equal(manifest.settings.AdjustmentOwner.valueLabels.grinder, 'Let the grinder adjust itself');
+  assert.equal(manifest.drivers.some((driver) => (driver.surfaces || []).some((surface) => surface.role === 'setup')), false, 'stock hosts reject a setup driver surface');
+});
+
+test('diagnostics render as an HTML page for ui=1 and stay JSON otherwise', async () => {
+  const fixture = {sent: [], events: []};
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 0}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 'secret-token'}})}, fixture);
+  const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
+  const html = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {...query, ui: '1'}});
+  assert.match(html.headers['Content-Type'], /^text\/html/);
+  assert.ok(html.body.includes('<h1>One</h1>') && html.body.includes('class="pu"'));
+  assert.equal(html.body.includes('secret-token'), false);
+  const json = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query});
+  assert.equal(json.headers['Content-Type'], 'application/json');
+  await loaded.plugin.onUnload();
 });

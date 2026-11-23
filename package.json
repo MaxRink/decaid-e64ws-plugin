@@ -6,6 +6,7 @@
     "test": "node --test test/plugin.test.mjs test/mock-server.test.mjs",
     "test:http": "playwright test test/playwright.test.mjs",
     "test:sim": "node --test test/sim-e2e.test.mjs",
+    "test:ui": "playwright test test/wizard-ui.test.mjs",
     "test:browser": "npm run test:http --",
     "mock": "node tools/e64-mock-server.mjs",
     "package": "python3 scripts/package-plugin.py"
@@ -14,5 +15,5 @@
   "devDependencies": {
     "@playwright/test": "1.65.1"
   },
-  "version": "0.6.0"
+  "version": "0.7.0"
 }

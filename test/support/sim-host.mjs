@@ -133,6 +133,10 @@ export function decaidApi({shots = {}, grinders = [], workflow = {context: {}}} 
       grinders.push(record);
       return json(201, record);
     }
+    if ((match = route.match(/^\/api\/v1\/grinders\/([^/]+)$/)) && method === 'GET') {
+      const record = grinders.find((g) => g.id === decodeURIComponent(match[1]));
+      return record ? json(200, record) : json(404, {error: 'Grinder not found'});
+    }
     if ((match = route.match(/^\/api\/v1\/grinders\/([^/]+)$/)) && method === 'PUT') {
       const record = grinders.find((g) => g.id === decodeURIComponent(match[1]));
       if (!record) return json(404, {error: 'Grinder not found'});
@@ -141,7 +145,15 @@ export function decaidApi({shots = {}, grinders = [], workflow = {context: {}}} 
     }
     if (route === '/api/v1/workflow' && method === 'GET') return json(200, workflow);
     if (route === '/api/v1/workflow' && method === 'PUT') {
-      for (const [key, value] of Object.entries(body)) workflow[key] = value && typeof value === 'object' && !Array.isArray(value) ? {...workflow[key], ...value} : value;
+      // Mirrors the host's deepMergeJson: objects merge recursively, everything else replaces.
+      const merge = (base, update) => {
+        for (const [key, value] of Object.entries(update)) {
+          if (value && typeof value === 'object' && !Array.isArray(value) && base[key] && typeof base[key] === 'object' && !Array.isArray(base[key])) merge(base[key], value);
+          else base[key] = value;
+        }
+      };
+      merge(workflow, body);
+      state.workflowWrites = (state.workflowWrites || 0) + 1;
       return json(200, workflow);
     }
     return json(404, {error: 'no route'});
