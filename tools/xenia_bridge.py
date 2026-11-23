@@ -35,8 +35,13 @@ POST_ROUTES = {
 MAX_BODY = 64 * 1024
 
 
-def target_url(base: str, plugin_id: str, endpoint: str, query: str = "") -> str:
+def target_url(base: str, plugin_id: str, endpoint: str, query: str = "",
+               instance: str | None = None) -> str:
     url = f"{base.rstrip('/')}/api/v1/plugins/{urllib.parse.quote(plugin_id, safe='')}/{endpoint}"
+    if instance:
+        # The plugin keeps Xenia sync state per E64 instance.
+        pairs = [(k, v) for k, v in urllib.parse.parse_qsl(query, keep_blank_values=True) if k != "instance"]
+        query = urllib.parse.urlencode(pairs + [("instance", instance)])
     if query:
         url += "?" + query
     return url
@@ -59,8 +64,9 @@ def forward(method: str, url: str, body: bytes | None,
 class Handler(BaseHTTPRequestHandler):
     server_version = "DecaidXeniaBridge/0.1"
 
-    def _config(self) -> tuple[str, str, float]:
-        return self.server.decaid, self.server.plugin_id, self.server.timeout  # type: ignore[attr-defined]
+    def _config(self) -> tuple[str, str, float, str | None]:
+        return (self.server.decaid, self.server.plugin_id,  # type: ignore[attr-defined]
+                self.server.timeout, self.server.instance)  # type: ignore[attr-defined]
 
     def _respond(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -70,9 +76,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _proxy(self, method: str, endpoint: str, body: bytes | None = None) -> None:
-        base, plugin_id, timeout = self._config()
+        base, plugin_id, timeout, instance = self._config()
         query = urllib.parse.urlsplit(self.path).query
-        url = target_url(base, plugin_id, endpoint, query)
+        url = target_url(base, plugin_id, endpoint, query, instance)
         status, payload, content_type = forward(method, url, body, timeout)
         self._respond(status, payload, content_type)
 
@@ -121,6 +127,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bind", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=80)
     parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--instance", default=None,
+                        help="E64 instance id; required when the plugin has several instances")
     args = parser.parse_args(argv)
     if args.port < 1024 and hasattr(os, "geteuid") and os.geteuid() != 0:
         print(f"warning: port {args.port} needs root; use sudo or a container",
@@ -132,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
     server.decaid = args.decaid  # type: ignore[attr-defined]
     server.plugin_id = args.plugin_id  # type: ignore[attr-defined]
     server.timeout = args.timeout  # type: ignore[attr-defined]
+    server.instance = args.instance  # type: ignore[attr-defined]
     print(f"Xenia bridge on http://{args.bind}:{args.port} -> {args.decaid} "
           f"({args.plugin_id})", file=sys.stderr)
     try:

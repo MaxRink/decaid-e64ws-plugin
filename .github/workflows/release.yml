@@ -11,7 +11,7 @@ jobs:
   version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: python3 scripts/package-plugin.py --tag "$GITHUB_REF_NAME"
 
   checks:
@@ -24,8 +24,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: decaid-e64ws-plugin-${{ github.sha }}
           path: dist
@@ -50,7 +50,7 @@ jobs:
           pathlib.Path('release-notes.md').write_text(
               f'Install the single ZIP below through Decaid’s plugin installer, or use this repository URL.\n\n'
               f'The tag matches manifest version {version}. Complete CI passed, including protocol/mock and HTTP API contracts, '
-              f'and the pinned Decaid host package/runtime contract.\n\n'
+              f'the Decaid host package/runtime contract against upstream main, and the Linux app smoke against pinned upstream main 1d74fbf7.\n\n'
               f'Physical hardware and firmware compatibility remain unvalidated; '
               f'CI uses synthetic devices and cannot establish physical-device support.\n\n'
               f'SHA-256 ({archives[0].name}): `{digest}`\n'

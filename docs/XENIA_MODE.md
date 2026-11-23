@@ -41,7 +41,8 @@ Decaid E64 plugin
 ## Setup
 
 1. Install plugin **0.4.0** or newer and configure a static token or
-   `MintTokens` + secure `PasswordsJson` (see the main README).
+   `MintTokens` + secure `PasswordsJson` (see the main README; from 0.4.2
+   secure entries are `{"host": ..., ...}` objects).
 2. Start the sidecar on the Decaid host:
 
 ```sh

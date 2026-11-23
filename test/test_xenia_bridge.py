@@ -56,6 +56,12 @@ class XeniaBridgeTests(unittest.TestCase):
             "http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/xenia-mako?a=1",
         )
 
+    def test_target_url_adds_instance(self) -> None:
+        self.assertEqual(
+            target_url("http://127.0.0.1:8080", "id", "xenia-brewratio", "instance=evil&a=1", "one"),
+            "http://127.0.0.1:8080/api/v1/plugins/id/xenia-brewratio?a=1&instance=one",
+        )
+
     def test_get_forward(self) -> None:
         status, body, _ = forward("GET", target_url(self.base, "id", "xenia-mako"), None, 5)
         self.assertEqual(status, 200)

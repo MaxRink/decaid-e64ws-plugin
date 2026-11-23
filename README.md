@@ -8,15 +8,28 @@ uses the current runtime-v2 Grinder contract.
 
 The plugin registers an independent Grinder device for each configured instance. It
 publishes the generic Grinder state (`idle`, `grinding`, `error`, or
-`unknown`) and a read-only setting observation; vendor responses from `RequestDriverState`, `RequestDriverConfig`,
-`RequestNachineInfo`, and `RequestLogMessages` are available through the
-diagnostics surface. There are no motor, grind-setting, RPM, calibration, or
+`unknown`) and a read-only setting observation; an allowlisted subset of the
+vendor `RequestDriverState`, `RequestDriverConfig` and `RequestNachineInfo`
+replies is available through the diagnostics surface. There are no motor, grind-setting, RPM, calibration, or
 GBS writes. Configure `InstancesJson` and secure `TokensJson` in the plugin
 settings. For automatic token minting, also set `MintTokens` to `true` and put
 the current Owner password in the secure `PasswordsJson`; `TokensJson` entries
 may then be empty. The gated `AllowNoPasswordWorkaround` setting can use the
 documented FW-01 SELECT-only login construction when no Owner password is set.
-`pollMs` defaults to 1000 and may be set to 0 to disable polling.
+`pollMs` defaults to 1000 and may be set to 0 to disable polling. `scheme`
+defaults to `wss`; an explicit `"ws"` keeps working for simulators, tunnels and
+trusted networks. `host` must be a loopback, RFC 1918, link-local (IPv4
+`169.254/16`, IPv6 `fe80::/10`), IPv6 ULA (`fc00::/7`) or `.local` address;
+other hosts are rejected so a token or password is never sent off the LAN.
+
+Secure `TokensJson` and `PasswordsJson` entries carry the host they were saved
+for: `{"one":{"host":"192.168.200.103","token":"<token>"}}` and
+`{"one":{"host":"192.168.200.103","password":"<owner-password>"}}`. The
+plugin refuses to load while an entry's `host` differs from the instance
+`host` in the ordinary `InstancesJson`, so changing the instance host cannot
+redirect a stored secret. After moving an instance, re-enter its secure
+entries for the new host. Plain-string entries from 0.4.1 and earlier must be
+re-saved in this form.
 
 The setting comes only from a `RequestDriverStateResult` containing a
 nonnegative safe-integer `ddValueDum` and an explicit `ddSensorFailed: false`.
@@ -49,11 +62,12 @@ single-connection, so a reconnect needs a fresh token. See
 source, firmware code, device capture or credentials are included in this
 package.
 
-`ws` is intended for a trusted network or simulator. `wss` uses the platform
-trust store; the plugin deliberately has no self-signed certificate bypass.
+`ws` is intended for a trusted network, tunnel or simulator. `wss` uses the
+per-instance `certSha256` pin when set, otherwise the platform trust store; the
+plugin deliberately has no self-signed certificate bypass.
 The test suite includes a fake host transport, a real loopback WebSocket
 fixture, and a real-QEMU integration guide (`docs/VM_TESTING.md`). The plugin
-also passes the upstream Decaid host-runtime test (`df177b75`). No physical
+also passes the upstream Decaid host-runtime test. No physical
 action or calibration validation is claimed; the 2026-11-18 pass was read-only
 and ran the plugin through a WebSocket harness, not Decaid's host transport.
 Multiple instances have independent sockets and protocol state, but Decaid
@@ -65,24 +79,33 @@ The E64 WSS listener needs a five-minute bearer token. There are three ways to
 provide it:
 
 1. **Static token (default).** Put a token in `TokensJson`:
-   `{"one":"<64-hex-token>"}`. The live token is single-connection; supply a
+   `{"one":{"host":"<instance host>","token":"<64-hex-token>"}}`. The live token is single-connection; supply a
    fresh one for every reconnect.
 2. **Owner password (recommended).** Set `MintTokens` to `"true"` and put the
    device's current Owner password in the secure `PasswordsJson`:
-   `{"one":"<owner-password>"}`. On each connect the plugin calls
-   `POST https://<host>/rest_api/login` and uses the returned bearer token.
-   The password is never logged.
+   `{"one":{"host":"<instance host>","password":"<owner-password>"}}`. On each
+   connect the plugin calls `POST https://<host>/rest_api/login` and uses the
+   returned bearer token. The password is never logged.
 3. **No-password workaround (gated).** If the device has no Owner password,
    set `MintTokens` to `"true"` and `AllowNoPasswordWorkaround` to `"true"`.
    The plugin uses the documented FW-01 SELECT-only login construction to mint
    a normal session token. This is an authentication bypass; enable it only on
    an owner-controlled device. The database is not written.
 
-The plugin uses the host's platform trust store for `fetch()` and `wss`. The
-E64 serves a self-signed certificate, so trust `webui.crt` in the host OS or use
-a static token obtained from a machine that does. The plugin deliberately does
-not bypass TLS. See [docs/CERTIFICATE_TRUST.md](docs/CERTIFICATE_TRUST.md) for
-macOS, Linux, Android and Windows steps.
+The E64 serves a self-signed certificate, so platform validation fails with
+`CERTIFICATE_VERIFY_FAILED`. Set the optional per-instance `certSha256` (64 hex
+characters, colons allowed) to pin it: the plugin passes it as `tlsPinSha256`
+to the login `fetch()` and the `wss` transport, and the host compares it with
+the SHA-256 of the leaf certificate. Without `certSha256` the plugin uses the
+host's platform trust store and does not bypass TLS. Hosts without pinning
+support ignore the option, so validation then falls back to the platform store.
+The E64 serves the same certificate on every unit, with its private key in the
+firmware image: the pin proves "an E64 certificate", not this grinder, and is
+combined with the private-host restriction above. Do not install the
+certificate as a trusted root. Login always uses HTTPS on port 443, the only
+E64 REST listener (HTTP 80 redirects), whatever the WebSocket `scheme`. See
+[docs/CERTIFICATE_TRUST.md](docs/CERTIFICATE_TRUST.md) for pinned and
+owner-LAN options.
 
 A clean Owner-password login was confirmed on 2026-11-18. The live unit served
 `ddValueDum=854` in the first session and `817` in a later clean-token session
@@ -90,9 +113,14 @@ after the dial moved; the plugin minted a token from the password and published
 `817 ddValueDum`.
 
 Dynamic tokens are cleared on disconnect and re-minted on the next connect.
+A failed login backs off before the next attempt: 5 s, doubling per failure
+up to 5 min, reset by a successful login. A connect inside the backoff window
+fails with `login backoff` without contacting the grinder.
 `GET <diagnostics>?read=connection` reports `connected`, `tokenSource`,
-`lastMintAt`, `lastMintError`, `staticToken` and `mintTokens`; it never returns
-the token or password. Static `TokensJson` values are reused, so a static token
+`lastMintAt`, `lastMintError`, `mintBackoffUntil`, `staticToken` and
+`mintTokens`; it never returns the token or password. `lastMintError` is a
+fixed category (`login HTTP <status>`, `login returned no bearer token` or
+`login request failed`) and never echoes device response text. Static `TokensJson` values are reused, so a static token
 must be refreshed manually after a single-connection close.
 
 ## Xenia mode
@@ -101,16 +129,24 @@ The plugin can present the Decaid host as a local **Xenia** to the E64's stock
 M2M client. The E64 calls `http://<host>/api/v2/*` on port 80, so a small
 host-side sidecar (`tools/xenia_bridge.py`) forwards those routes to the plugin
 endpoints. No E64 root or firmware change is involved; only the M2M host field
-changes. `scripts/execute` is acknowledged but does not start a brew.
+changes. `scripts/execute` is acknowledged but does not start a brew. Brew
+ratio and script state are kept per instance; with several instances, run one
+bridge per E64 with `--instance <id>`.
 
 See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
 
 ## Installation
 
-Version 0.4.0 requires a Decaid build containing the read-only Grinder observation
-contract from #973 and tracks upstream Decaid `main` (verified against `df177b75` on 2026-10-31),
-in addition to runtime-v2 and validated device surfaces. The stable `0.8.8` release has not been
+Version 0.4.3 requires a Decaid build containing the read-only Grinder observation
+contract from #973 and the plugin `notifications` permission (#1003), and tracks upstream Decaid
+`main` (verified against `1d74fbf7` on 2026-11-23), in addition to runtime-v2 and validated device
+surfaces. `certSha256` pinning needs a host with `tlsPinSha256` support; older hosts ignore it. The stable `0.8.8` release has not been
 validated with this plugin and should not be treated as compatible.
+
+A failing login also raises a Decaid notification for that instance, withdrawn
+after the next successful login. `MintTokens` and `AllowNoPasswordWorkaround`
+are `"true"`/`"false"` choices, so existing values carry over. `restPort`
+overrides the HTTPS login port (default 443) for tunnels and simulators.
 
 Use Decaid's GitHub-release installer for stable installations. Each release
 contains one installable ZIP, and its tag matches the manifest version:
@@ -139,8 +175,34 @@ package root, as required by Decaid's plugin package resolver.
 
 CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
 and GitHub source archive against upstream Decaid `main` using Flutter 3.50.0
-(Dart 3.14); the Linux app smoke pins the verified host `df177b75` with Flutter
-3.44.2 so the UI-runtime check stays comparable to the documented baseline.
+(Dart 3.14); the Linux app smoke pins upstream main `1d74fbf7` with Flutter 3.47.9,
+the first pinned host that accepts the `notifications` permission.
+
+## Simulator end-to-end tests
+
+`npm run test:sim` runs the plugin against the E64 WS simulator from the
+private research repository, located through `E64_SIM_ROOT` (default
+`../mahlkoenig-e64ws-local-research`; its `.venv/bin/python` is used when
+present, or `E64_SIM_PYTHON`). Nothing from that repository is copied here; a
+self-signed certificate is generated per run. The suite covers:
+
+| Area | Simulator path |
+| --- | --- |
+| Static token, wrong token | `ws` with `--token` |
+| Owner-password minting | `/rest_api/login` over HTTPS with `restPort` and a `certSha256` pin |
+| FW-01 no-password workaround | `--fw01-login` |
+| WSS pinning, missing and wrong pins | `--tls-cert`, `--http-tls-cert` |
+| DD and grind state | `/sim/action` `SetAgsaTargetDdValue`, `StartGrindManual`, `Stop` |
+| Real 2026-11-19 grind replay | `--replay` with the sanitized capture, `/sim/replay/seek` |
+| Diagnostics allowlist | simulator state, config and machine-info payloads |
+| Failed-login notice and backoff | wrong password |
+| Reconnect | simulator restart on the same ports |
+| Xenia routes | `tools/xenia_bridge.py --instance` against the plugin |
+
+The tests fail when the simulator is missing unless `E64_SIM_OPTIONAL=1`.
+`ci/host_sim_test.dart` runs the same login, pinning and DD path inside the
+Decaid host; CI's `sim-e2e` job runs both when the `RESEARCH_REPO_SSH_KEY`
+deploy key is available and otherwise reports that it was skipped.
 
 HTTP API contract checks use the repository mock fixture and Playwright's request
 client. They run in Node without launching a browser and do not require E64 hardware:
@@ -202,12 +264,18 @@ exact installed source revision before these checks count as verified evidence.
 
 ## Diagnostics and errors
 
-The diagnostics surface accepts `GET` with the host `deviceId`. With no `read`
-parameter it returns last-known observations, which may remain available after
-disconnection. Reconnecting starts a fresh observation set. `read=config`,
-`read=machineInfo` and `read=logs` require a connected instance and validate the
-reply before returning it. Unsupported reads return 400, unknown instances 404,
-unsupported methods 405, and disconnected, timed-out or invalid read replies 503.
+The diagnostics surface accepts `GET` with the host `deviceId`. The supported
+`read` values are none, `config`, `machineInfo`, `connection` and `xenia`.
+With no `read` parameter it returns last-known observations, including the
+latest polled `state`, which may remain available after disconnection; there is
+no separate `read=state`. Reconnecting starts a fresh observation set.
+`read=config` and `read=machineInfo` require a connected instance and validate
+the reply before returning it. All diagnostics, including the last-known state, contain only an
+allowlist of operational fields (`plugin.js` `exposed`): serial numbers,
+session ids, Wi-Fi credentials, cloud URLs and log messages are dropped, and
+there is no `read=logs`. Unsupported reads return 400, unknown instances and
+endpoints 404, unsupported methods 405, and disconnected, timed-out or invalid
+read replies 503.
 
 Responses include `X-E64-Observation-State` (`live`, `last-known`, or `none`).
 `live` identifies a successful fresh read; cached observations are always

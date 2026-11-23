@@ -3,13 +3,13 @@
   "name": "Mahlk\u00f6nig E64",
   "author": "Decaid contributors",
   "description": "Read-only Mahlk\u00f6nig E64 grinder telemetry over WebSocket.",
-  "version": "0.4.0",
+  "version": "0.4.3",
   "apiVersion": 1,
   "permissions": [
-    "log",
     "api",
     "network.websocket",
-    "events.machine"
+    "events.machine",
+    "notifications"
   ],
   "drivers": [
     {
@@ -32,18 +32,19 @@
     "InstancesJson": {
       "type": "string",
       "label": "E64 instances",
-      "description": "JSON array of id, name, scheme, host, port, and optional pollMs.",
+      "description": "JSON array of id, name, host, port, optional scheme (wss by default, ws allowed), optional pollMs, optional certSha256 (pinned SHA-256 of the E64 certificate) and optional restPort (login HTTPS port, default 443). Hosts must be loopback, private, link-local or .local.",
       "default": "[]"
     },
     "TokensJson": {
       "type": "string",
       "label": "E64 session tokens",
-      "description": "JSON object mapping instance ids to WebSocket tokens.",
+      "description": "JSON object mapping instance ids to {\"host\": <instance host>, \"token\": <token>}. An entry is only used while the instance host matches.",
       "secure": true,
       "default": "{}"
     },
     "MintTokens": {
-      "type": "string",
+      "type": "enum",
+      "values": ["false", "true"],
       "label": "Mint tokens on connect",
       "description": "When true, empty TokensJson entries are filled by logging in on each connect. Requires PasswordsJson or AllowNoPasswordWorkaround.",
       "default": "false"
@@ -51,12 +52,13 @@
     "PasswordsJson": {
       "type": "string",
       "label": "E64 Owner passwords",
-      "description": "JSON object mapping instance ids to the current Owner password. Stored as a secure setting and never logged.",
+      "description": "JSON object mapping instance ids to {\"host\": <instance host>, \"password\": <Owner password>}. Stored as a secure setting and never logged; re-enter it after changing the instance host.",
       "secure": true,
       "default": "{}"
     },
     "AllowNoPasswordWorkaround": {
-      "type": "string",
+      "type": "enum",
+      "values": ["false", "true"],
       "label": "Allow no-password workaround",
       "description": "Use the documented FW-01 SELECT-only login construction when no Owner password is set. This is an authentication bypass; enable only on an owner-controlled device. Default false.",
       "default": "false"

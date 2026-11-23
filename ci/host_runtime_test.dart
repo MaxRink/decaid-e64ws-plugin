@@ -80,7 +80,11 @@ void main() {
                 'ddSensorFailed': false,
                 'fan1TachoRpm': 800,
               },
-              'RequestDriverConfig' => {'model': 'E64'},
+              'RequestDriverConfig' => {
+                'configVersion': 27,
+                'grinderSn': 'SN-SECRET',
+                'productionWifiPassword': 'WIFI-SECRET',
+              },
               'RequestNachineInfo' => {'firmware': 'mock-1'},
               'RequestLogMessages' => {'entries': <dynamic>[]},
               _ => {'state': 'unknown'},
@@ -135,8 +139,8 @@ void main() {
             },
           ]),
           'TokensJson': jsonEncode({
-            'idle': 'idle-token',
-            'grinding': 'grinding-token',
+            'idle': {'host': '127.0.0.1', 'token': 'idle-token'},
+            'grinding': {'host': '127.0.0.1', 'token': 'grinding-token'},
           }),
         },
         jsCode: source,
@@ -203,7 +207,9 @@ void main() {
         'query': {'deviceId': devices.first.deviceId, 'read': 'config'},
       });
       expect(read['status'], 200);
-      expect(read['body'] as String, contains('E64'));
+      expect(read['body'] as String, contains('configVersion'));
+      expect(read['body'] as String, isNot(contains('SN-SECRET')));
+      expect(read['body'] as String, isNot(contains('WIFI-SECRET')));
       final readHeaders = (read['headers'] as Map).cast<String, dynamic>();
       expect(readHeaders['X-E64-Observation-State'], 'live');
       expect(readHeaders['X-E64-Observation-Time'], isNotEmpty);

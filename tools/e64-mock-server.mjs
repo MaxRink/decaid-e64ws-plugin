@@ -37,10 +37,11 @@ function reply(socket, request) {
   if (!Number.isSafeInteger(refId) || !request.data || Array.isArray(request.data) || typeof request.data !== 'object') { send(socket, {type: 'MalformedRequest'}); return; }
   counts[type] += 1;
   if (controls.dropReplies) return;
-  const result = type === 'RequestDriverConfig' ? {grindSize: 64, mode: 'mock'}
-    : type === 'RequestNachineInfo' ? {model: 'E64S', serial: `MOCK-${id}`}
+  // Sensitive-looking fields are synthetic; they let tests prove diagnostics drop them.
+  const result = type === 'RequestDriverConfig' ? {configVersion: 27, grinderType: 5, targetWeightGr: 5, grinderSn: `MOCK-${id}`, productionWifiPassword: 'mock-wifi-password'}
+    : type === 'RequestNachineInfo' ? {grinderType: `E64 WS mock ${id}`, grinderSn: `MOCK-${id}`, sessionId: `mock-session-${id}`}
     : type === 'RequestLogMessages' ? {messages: [`mock ${id} ready`]}
-    : {grindState: state, ddValueDum: controls.ddValueDum, ddSensorFailed: controls.ddSensorFailed, fan1TachoRpm: 800, grinder: id};
+    : {grindState: state, ddValueDum: controls.ddValueDum, ddSensorFailed: controls.ddSensorFailed, fan1TachoRpm: 800, grinderType: `E64 WS mock ${id}`, sessionId: `mock-session-${id}`};
   const value = {type: responseType, refId, data: result};
   setTimeout(() => { send(socket, value); if (controls.duplicateReplies) send(socket, value); }, controls.delayMs);
 }

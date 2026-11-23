@@ -57,7 +57,7 @@ request POST /api/v1/plugins/install/github-branch 200 "$(jq -cn --arg repo "$PL
 assert_json '.id == "mahlkoenig-e64.reaplugin"'
 request GET /api/v1/plugins 200
 jq -e --arg sha "$PLUGIN_SHA" '.[] | select(.id == "mahlkoenig-e64.reaplugin") | .source.commit == $sha' "$scratch/response" >/dev/null
-settings=$(jq -cn '{InstancesJson:([{id:"one",name:"Mock One",scheme:"ws",host:"127.0.0.1",port:9997,pollMs:100},{id:"two",name:"Mock Two",scheme:"ws",host:"127.0.0.1",port:9998,pollMs:100}]|tojson),TokensJson:({one:"token-one",two:"token-two"}|tojson)}')
+settings=$(jq -cn '{InstancesJson:([{id:"one",name:"Mock One",scheme:"ws",host:"127.0.0.1",port:9997,pollMs:100},{id:"two",name:"Mock Two",scheme:"ws",host:"127.0.0.1",port:9998,pollMs:100}]|tojson),TokensJson:({one:{host:"127.0.0.1",token:"token-one"},two:{host:"127.0.0.1",token:"token-two"}}|tojson)}')
 request POST "/api/v1/plugins/$plugin/settings" 200 "$settings"
 assert_json '.TokensJson.isSet == true'
 assert_redacted
@@ -96,16 +96,17 @@ for state in grinding error unknown idle; do
   control "$mock_one" "$(jq -cn --arg state "$state" '{state:$state}')"
   poll_json /api/v1/grinder/state ".state == \"$state\""
 done
-for read in machineInfo config logs; do
+for read in machineInfo config; do
   request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$one&read=$read" 200
   case "$read" in
-    machineInfo) assert_json '.serial == "MOCK-one"';;
-    config) assert_json '.mode == "mock" and .grindSize == 64';;
-    logs) assert_json '.messages == ["mock one ready"]';;
+    machineInfo) assert_json '. == {"grinderType":"E64 WS mock one"}';;
+    config) assert_json '.configVersion == 27 and (has("grinderSn") | not) and (has("productionWifiPassword") | not)';;
   esac
   assert_redacted
 done
-request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$one&read=startMotor" 400
+for read in logs startMotor; do
+  request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$one&read=$read" 400
+done
 for action in grinding idle; do
   request PUT "/api/v1/grinder/state/$action" 500
   assert_json '.code == "unsupported_operation"'
@@ -121,7 +122,7 @@ connect_device "$two"
 poll_json /api/v1/grinder/info '.deviceId == "plugin:mahlkoenig-e64.reaplugin:e64:two"'
 poll_json /api/v1/grinder/state '.state == "error" and .observedSetting == "602 ddValueDum"'
 request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$two&read=machineInfo" 200
-assert_json '.serial == "MOCK-two"'
+assert_json '.grinderType == "E64 WS mock two"'
 control "$mock_one" '{"state":"grinding"}'
 poll_json /api/v1/grinder/state '.state == "error"'
 request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$one&read=config" 503
@@ -129,7 +130,7 @@ assert_redacted
 connect_device "$one"
 poll_json /api/v1/grinder/state '.state == "grinding" and .observedSetting == "502 ddValueDum"'
 request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$one" 200
-assert_json '.state.grinder == "one" and (has("machineInfo") | not) and (has("config") | not) and (has("logs") | not)'
+assert_json '.state.grinderType == "E64 WS mock one" and (.state | has("sessionId") | not) and (has("machineInfo") | not) and (has("config") | not) and (has("logs") | not)'
 control "$mock_one" '{"action":"close"}'
 poll_unavailable /api/v1/grinder/state
 request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$one&read=config" 503
@@ -143,14 +144,14 @@ poll_json /api/v1/grinder/state '.state == "idle"'
 
 printf 'Checking authentication and timeout error surfacing\n'
 request PUT /api/v1/devices/disconnect 200 "$(jq -cn --arg id "$one" '{deviceId:$id}')"
-request POST "/api/v1/plugins/$plugin/settings" 200 '{"TokensJson":"{\"one\":\"incorrect-fixture-token\",\"two\":\"token-two\"}"}'
+request POST "/api/v1/plugins/$plugin/settings" 200 "$(jq -cn '{TokensJson:({one:{host:"127.0.0.1",token:"incorrect-fixture-token"},two:{host:"127.0.0.1",token:"token-two"}}|tojson)}')"
 assert_redacted
 request GET '/api/v1/devices/scan?connect=false' 200
 request PUT /api/v1/devices/connect 503 "$(jq -cn --arg id "$one" '{deviceId:$id}')"
 assert_json '.outcome == "failed" and .connectionError.kind == "grinderConnectFailed"'
 assert_redacted
 request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$one&read=config" 503
-request POST "/api/v1/plugins/$plugin/settings" 200 "$(jq -cn '{TokensJson:({one:"token-one",two:"token-two"}|tojson)}')"
+request POST "/api/v1/plugins/$plugin/settings" 200 "$(jq -cn '{TokensJson:({one:{host:"127.0.0.1",token:"token-one"},two:{host:"127.0.0.1",token:"token-two"}}|tojson)}')"
 assert_redacted
 request GET '/api/v1/devices/scan?connect=false' 200
 connect_device "$one"

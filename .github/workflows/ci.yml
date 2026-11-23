@@ -19,8 +19,8 @@ jobs:
       matrix:
         node: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: ${{ matrix.node }}
       - run: npm ci
@@ -30,7 +30,7 @@ jobs:
       - run: npm run package
       - run: python3 -m unittest discover -s test -p package_plugin_test.py
       - run: python3 -m unittest discover -s test -p test_xenia_bridge.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: matrix.node == 24
         with:
           name: decaid-e64ws-plugin-${{ github.sha }}
@@ -41,8 +41,8 @@ jobs:
     name: HTTP API contract
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           cache: npm
@@ -50,7 +50,7 @@ jobs:
       - run: npm run test:http
       - name: Upload Playwright artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e64-playwright-results
           path: |
@@ -62,20 +62,20 @@ jobs:
     name: Decaid host compatibility
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: decentespresso/decaid
           ref: main
           path: decaid
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
           flutter-version: 3.50.0
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
-      - name: Stage package for the pinned host resolver
+      - name: Stage package for the upstream main host resolver
         env:
           PLUGIN_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           PLUGIN_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
@@ -91,7 +91,7 @@ jobs:
           echo "E64_GITHUB_PACKAGE=/tmp/e64-github-package" >> "$GITHUB_ENV"
           cp ci/host_manifest_compat_test.dart decaid/test/e64_external_manifest_compat_test.dart
           cp ci/host_runtime_test.dart decaid/test/plugins/e64_external_runtime_test.dart
-      - name: Run pinned host parser and package resolver
+      - name: Run upstream main host parser and package resolver
         working-directory: decaid
         env:
           E64_PACKAGE: ${{ github.workspace }}
@@ -118,17 +118,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: decentespresso/decaid
-          ref: df177b75bd04ee91a33d278730df6675ee5f82bb
+          # Upstream main 2026-11-20: first pin with the notifications permission the plugin declares.
+          ref: 1d74fbf7a5eb3a5ba5208b4147aea136726a4909
           path: decaid
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           channel: stable
-          flutter-version: 3.44.2
-      - uses: actions/setup-node@v5
+          flutter-version: 3.47.9
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
       - name: Install Linux runtime dependencies
@@ -200,8 +201,79 @@ jobs:
           fi
       - name: Upload runtime logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e64-linux-runtime-logs
           path: ${{ runner.temp }}/e64-*.log
           if-no-files-found: ignore
+
+  sim-e2e:
+    name: E64 simulator end-to-end
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      HAS_RESEARCH_KEY: ${{ secrets.RESEARCH_REPO_SSH_KEY != '' }}
+      E64_SIM_ROOT: ${{ github.workspace }}/research
+    steps:
+      - name: Report missing research access
+        if: env.HAS_RESEARCH_KEY != 'true'
+        run: |
+          message='Skipped: RESEARCH_REPO_SSH_KEY is not available (fork or unconfigured), so the private E64 simulator cannot be checked out.'
+          echo "::notice title=E64 simulator end-to-end skipped::$message"
+          echo "### E64 simulator end-to-end skipped" >> "$GITHUB_STEP_SUMMARY"
+          echo "$message" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        if: env.HAS_RESEARCH_KEY == 'true'
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        if: env.HAS_RESEARCH_KEY == 'true'
+        with:
+          repository: MaxRink/mahlkoenig-e64ws-local-research
+          ssh-key: ${{ secrets.RESEARCH_REPO_SSH_KEY }}
+          path: research
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        if: env.HAS_RESEARCH_KEY == 'true'
+        with:
+          node-version: 24
+      - name: Prepare the simulator
+        if: env.HAS_RESEARCH_KEY == 'true'
+        run: |
+          python3 -m venv research/.venv
+          research/.venv/bin/pip install -r research/tools/requirements.txt
+          test -f research/tests/fixtures/grind-20261119-01.sanitized.jsonl
+      - name: Plugin against the simulator
+        if: env.HAS_RESEARCH_KEY == 'true'
+        run: |
+          npm ci
+          npm run test:sim
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        if: env.HAS_RESEARCH_KEY == 'true'
+        with:
+          repository: MaxRink/decaid
+          # Fork head with opt-in TLS pinning (tlsPinSha256), which upstream main lacks.
+          ref: 45056e8734ed7f95380b804d921d3d4d51043a57
+          path: decaid
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        if: env.HAS_RESEARCH_KEY == 'true'
+        with:
+          channel: stable
+          flutter-version: 3.50.0
+      - name: Decaid host against the simulator
+        if: env.HAS_RESEARCH_KEY == 'true'
+        working-directory: decaid
+        env:
+          E64_PLUGIN_ROOT: ${{ github.workspace }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          flutter pub get
+          ./scripts/fetch_dye2_plugin.sh
+          ./scripts/fetch_shot_upload_plugin.sh
+          ./scripts/fetch_dcamp_plugin.sh
+          mkdir -p assets/bundled_skins
+          printf '[]\n' > assets/bundled_skins/manifest.json
+          : > assets/bundled_skins/stub-skin.zip
+          QUICKJS_LIB_DIR=$(find "${PUB_CACHE:-$HOME/.pub-cache}/git" -path '*dart_js*/linux/shared' -type d -print -quit)
+          test -n "$QUICKJS_LIB_DIR"
+          export LD_LIBRARY_PATH="$QUICKJS_LIB_DIR:${LD_LIBRARY_PATH:-}"
+          cp ../ci/host_sim_test.dart test/plugins/e64_external_sim_test.dart
+          flutter test test/plugins/e64_external_sim_test.dart test/plugins/plugin_tls_pin_test.dart

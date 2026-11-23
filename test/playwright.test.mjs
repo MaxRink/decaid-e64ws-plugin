@@ -36,7 +36,7 @@ test.beforeAll(async () => {
   const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent};
   vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
   plugin = sandbox.createPlugin(host);
-  await plugin.onLoad({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', host: '127.0.0.1', port, pollMs: 100}]), TokensJson: JSON.stringify({one: 'token-one'})});
+  await plugin.onLoad({InstancesJson: JSON.stringify([{id: 'one', name: 'E64', scheme: 'ws', host: '127.0.0.1', port, pollMs: 100}]), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 'token-one'}})});
   registration = registrations[0];
   const context = {transport: {
     async open({url}) { const socket = new WebSocket(url); await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, {once: true}); socket.addEventListener('error', reject, {once: true}); }); return {handle: socket}; },
@@ -76,7 +76,7 @@ test('serves live diagnostics and rejects unsupported controls through HTTP', as
   const info = await request.get(`${baseUrl}/diagnostics?deviceId=${encodeURIComponent(registration.device.deviceId)}&read=machineInfo`);
   expect(info.status()).toBe(200);
   expect(info.headers()['x-e64-observation-state']).toBe('live');
-  expect(await info.json()).toMatchObject({model: 'E64S'});
+  expect(await info.json()).toEqual({grinderType: 'E64 WS mock one'});
   const rejected = await request.get(`${baseUrl}/diagnostics?deviceId=${encodeURIComponent(registration.device.deviceId)}&read=startMotor`);
   expect(rejected.status()).toBe(400);
 });

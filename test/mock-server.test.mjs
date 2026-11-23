@@ -80,8 +80,8 @@ test('public mock authenticates and correlates read replies', async t => {
     assert.equal(response.type, `${type}Result`);
     assert.equal(response.refId, index + 17);
     assert.equal(typeof response.data, 'object');
-    if (type === 'RequestDriverState') assert.deepEqual(response.data, {grindState: 'idle', ddValueDum: 501, ddSensorFailed: false, fan1TachoRpm: 800, grinder: 'test'});
-    if (type === 'RequestNachineInfo') assert.equal(response.data.serial, 'MOCK-test');
+    if (type === 'RequestDriverState') assert.deepEqual(response.data, {grindState: 'idle', ddValueDum: 501, ddSensorFailed: false, fan1TachoRpm: 800, grinderType: 'E64 WS mock test', sessionId: 'mock-session-test'});
+    if (type === 'RequestNachineInfo') assert.equal(response.data.grinderSn, 'MOCK-test');
   }
   socket.send({type: 'StartMotor', msgId: 99});
   assert.deepEqual(JSON.parse(await socket.next()), {type: 'Error', refId: 99, error: 'unsupported read command'});

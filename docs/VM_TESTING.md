@@ -59,7 +59,7 @@ In Decaid, configure one instance:
 and the matching token:
 
 ```json
-{"vm":"<the token from step 2>"}
+{"vm":{"host":"127.0.0.1","token":"<the token from step 2>"}}
 ```
 
 ![Machine-to-machine screen](assets/machine-to-machine.png)

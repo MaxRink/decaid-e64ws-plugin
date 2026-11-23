@@ -17,7 +17,7 @@ const host = {devices: {register(definition, handlers) {registrations.push({defi
 const plugin = sandbox.createPlugin(host);
 await plugin.onLoad({
   InstancesJson: JSON.stringify([{id: 'vm', name: 'QEMU E64', host: '127.0.0.1', port, scheme: 'ws', pollMs: 0}]),
-  TokensJson: JSON.stringify({vm: token})
+  TokensJson: JSON.stringify({vm: {host: '127.0.0.1', token}})
 });
 
 let published;
