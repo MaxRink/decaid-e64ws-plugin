@@ -83,6 +83,31 @@ and ran the plugin through a WebSocket harness, not Decaid's host transport.
 Multiple instances have independent sockets and protocol state, but Decaid
 currently selects one connected Grinder for workflows.
 
+## Compatible grinders
+
+The plugin speaks the local API of Mahlkönig's STM32MP15x touch-display
+platform: WSS on port 9997 (token from an Owner login on 443) and the
+lighttpd/PHP REST routes on 443. Which products carry that API follows from the
+published firmware (see the research repo's `docs/FLEET_FIRMWARE.md` and
+`docs/FIRMWARE_DIFF_HSG_vs_NG2.md`).
+
+| Grinder | Firmware line | Status |
+|---|---|---|
+| E64 WS | HSG (`HEM-HSG-HMI-S01`, tested on V01.16-24) | **Supported and tested** on a real unit. |
+| E64 TS | HSG (same image; `grinderType` 6) | **Expected to work, untested.** Same firmware and API; the Decaid grinder record is still named "Mahlkönig E64 WS" and gets the E64 burr default, so rename it in Decaid. |
+| E65T GbS, E65W GbS, E80T GbS, E80W GbS | NG2 (`HEM-NG2-HMI-S01`, V01.36-2; one image for all four) | **Likely to connect, untested, not supported yet.** NG2 runs the same HMI application family (`NgxUiApp`/`libNgxUi`), the same WSS :9997 server, a byte-identical PHP web root and the same static TLS key, so login, token and pinning should work. Not verified: the individual WSS commands, the Owner password check (NG2 uses its own role check with a different default), the displayed grind value (the plugin assumes the E64's `ddValueDum ÷ 10` scale), and Grind-by-Sync dosing. The plugin also labels the grinder record "E64 WS" with 64 mm burrs. |
+| EK Omnia | EKX (`Hemro-EK-Omnia-Firmware`) | **Not compatible.** Same board, different application (`EkxUI`): no JSON WSS API on 9997 and no PHP web app; its only WebSocket is a file service on 9988. |
+| X54, X64 SD | none published | **Not compatible.** No local network API on this platform; app/cloud only. |
+| E65S GbW, E80S GbW, EK43, K30, Peak, K60, Vario and other non-networked models | none | **Not compatible.** No network interface for the plugin to use. |
+
+The plugin's "Xenia mode" is not a Xenia integration: it lets the E64 treat
+Decaid as a Xenia espresso machine for Brew-by-Sync. It does not control a
+Xenia.
+
+If you own one of the NG2 grinders, a read-only check helps: open
+`https://<grinder>/rest_api/get_machine_info` in a browser (accept the certificate) and
+report the `grinderTypeName` together with the plugin's diagnostics page.
+
 ## Setup
 
 Open **Decaid > Settings > Plugins > Mahlkönig E64 > Set up** (the plugin's
