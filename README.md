@@ -33,11 +33,20 @@ re-saved in this form.
 
 The setting comes only from a `RequestDriverStateResult` containing a
 nonnegative safe-integer `ddValueDum` and an explicit `ddSensorFailed: false`.
-It is published as the opaque string `501 ddValueDum`, for example. This retains
-the device's raw coordinate without presenting it as a calibrated display value,
-particle size, recipe target or physical dose record. No conversion to micrometres
-is performed. Missing or invalid values clear the observation on the next state
-response. Each reading expires after five seconds, including with polling
+It is published as the value the grinder shows on its own display: `ddValueDum`
+is in deci-micrometres (0.1 µm), and the HMI converts it to whole micrometres
+with `AbstractAgsaDdSensor::ddValueUm()` in `libNgxUi.so` V01.16-24, which
+computes `(ddValueDum + 5) / 10` with integer division, rounding halves up.
+`827` is therefore published as the bare string `"83"` (82.7 µm), matching the
+display on a live unit; `825` gives `"83"` and `824` gives `"82"`. The research
+notes record the unit (`Dum` = deci-micrometres, `500 Dum = 50.0 µm`, and the
+database migration from 1 µm to 0.1 µm resolution). The HMI's separate
+`QmlHelpers::roundToMicrometers` helper truncates instead; it is not what the
+grinder displays for this value. The number is the grinder's dial reading, not a
+particle size, recipe target or calibrated burr gap, and Streamline's Follow
+Grinder reads it as a plain integer. The raw `ddValueDum` stays available in
+the diagnostics state view. Missing or invalid values clear the observation on
+the next state response. Each reading expires after five seconds, including with polling
 disabled; diagnostics retain their labelled last-known copy. A successful new
 state read refreshes that window independently for each instance. Configuration
 reads do not refresh it.
@@ -54,7 +63,7 @@ token to capture `RequestDriverState`, `RequestDriverConfig` and
 `grindState=idle`, `overshootWeightGr=0.53696`, both fan tachos `0` and NTC2
 absent. The shipped plugin was also run against the live unit through a Node
 WebSocket harness and published `{"state":"idle","observedSetting":"854
-ddValueDum"}`; diagnostics `machineInfo` and `config` returned HTTP 200.
+ddValueDum"}` (the pre-0.4.4 format; now `"85"`); diagnostics `machineInfo` and `config` returned HTTP 200.
 Calibration/units and any future grinder-RPM mapping remain
 hardware-validation work tracked in issue #9. The live token was
 single-connection, so a reconnect needs a fresh token. See
@@ -110,7 +119,7 @@ owner-LAN options.
 A clean Owner-password login was confirmed on 2026-11-18. The live unit served
 `ddValueDum=854` in the first session and `817` in a later clean-token session
 after the dial moved; the plugin minted a token from the password and published
-`817 ddValueDum`.
+`817 ddValueDum` (now published as `"82"`).
 
 Dynamic tokens are cleared on disconnect and re-minted on the next connect.
 A failed login backs off before the next attempt: 5 s, doubling per failure
@@ -137,7 +146,7 @@ See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
 
 ## Installation
 
-Version 0.4.3 requires a Decaid build containing the read-only Grinder observation
+Version 0.4.4 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and the plugin `notifications` permission (#1003), and tracks upstream Decaid
 `main` (verified against `1d74fbf7` on 2026-11-23), in addition to runtime-v2 and validated device
 surfaces. `certSha256` pinning needs a host with `tlsPinSha256` support; older hosts ignore it. The stable `0.8.8` release has not been
@@ -235,8 +244,8 @@ the original Decaid attribution retained in `NOTICE`.
 `docs/VM_TESTING.md` describes the optional integration against the from-SWU
 QEMU grinder: mint a local WSS token, run `tools/ws-bridge.py` in front of the
 VM's TLS WSS, and execute `test/vm-integration.mjs` with the actual
-`plugin.js`. The verified run published `{"state":"idle","observedSetting":"0
-ddValueDum"}` after DD calibration and read live `machineInfo`/`config`
+`plugin.js`. The verified run published `{"state":"idle","observedSetting":"0"}`
+after DD calibration and read live `machineInfo`/`config`
 diagnostics.
 
 ## Public mock fixture

@@ -76,7 +76,7 @@ printf 'Checking state publication, diagnostics and read-only controls\n'
 control "$mock_one" '{"state":"idle"}'
 connect_device "$one"
 poll_json /api/v1/grinder/info '.deviceId == "plugin:mahlkoenig-e64.reaplugin:e64:one" and .capabilities == [] and .observations == ["setting"]'
-poll_json /api/v1/grinder/state '.state == "idle" and .observedSetting == "501 ddValueDum" and (has("observedRpm") | not)'
+poll_json /api/v1/grinder/state '.state == "idle" and .observedSetting == "50" and (has("observedRpm") | not)'
 DECAID_URL="$base" node --input-type=module <<'JS'
 import assert from 'node:assert/strict';
 const url = new URL('/ws/v1/grinder/snapshot', process.env.DECAID_URL);
@@ -88,14 +88,14 @@ try {
     socket.addEventListener('message', event => { clearTimeout(timer); resolve(JSON.parse(event.data)); }, {once: true});
     socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('Grinder snapshot rejected')); }, {once: true});
   });
-  assert.equal(snapshot.observedSetting, '501 ddValueDum');
+  assert.equal(snapshot.observedSetting, '50');
   assert.equal(Object.hasOwn(snapshot, 'observedRpm'), false);
 } finally { socket.close(); }
 JS
 control "$mock_one" '{"ddSensorFailed":true}'
 poll_json /api/v1/grinder/state 'has("observedSetting") | not'
-control "$mock_one" '{"ddSensorFailed":false,"ddValueDum":502}'
-poll_json /api/v1/grinder/state '.observedSetting == "502 ddValueDum"'
+control "$mock_one" '{"ddSensorFailed":false,"ddValueDum":515}'
+poll_json /api/v1/grinder/state '.observedSetting == "52"'
 for state in grinding error unknown idle; do
   control "$mock_one" "$(jq -cn --arg state "$state" '{state:$state}')"
   poll_json /api/v1/grinder/state ".state == \"$state\""
@@ -124,7 +124,7 @@ printf 'Checking selection isolation and disconnect/reconnect\n'
 control "$mock_two" '{"state":"error","ddValueDum":602}'
 connect_device "$two"
 poll_json /api/v1/grinder/info '.deviceId == "plugin:mahlkoenig-e64.reaplugin:e64:two"'
-poll_json /api/v1/grinder/state '.state == "error" and .observedSetting == "602 ddValueDum"'
+poll_json /api/v1/grinder/state '.state == "error" and .observedSetting == "60"'
 request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$two&read=machineInfo" 200
 assert_json '.grinderType == "E64 WS mock two"'
 control "$mock_one" '{"state":"grinding"}'
@@ -132,7 +132,7 @@ poll_json /api/v1/grinder/state '.state == "error"'
 request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$one&read=config" 503
 assert_redacted
 connect_device "$one"
-poll_json /api/v1/grinder/state '.state == "grinding" and .observedSetting == "502 ddValueDum"'
+poll_json /api/v1/grinder/state '.state == "grinding" and .observedSetting == "52"'
 request GET "/api/v1/plugins/$plugin/e64-diagnostics?deviceId=$one" 200
 assert_json '.state.grinderType == "E64 WS mock one" and (.state | has("sessionId") | not) and (has("machineInfo") | not) and (has("config") | not) and (has("logs") | not)'
 control "$mock_one" '{"action":"close"}'

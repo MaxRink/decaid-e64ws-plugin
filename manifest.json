@@ -3,7 +3,7 @@
   "name": "Mahlk\u00f6nig E64",
   "author": "Decaid contributors",
   "description": "Read-only Mahlk\u00f6nig E64 grinder telemetry over WebSocket.",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "apiVersion": 1,
   "permissions": [
     "api",

@@ -167,7 +167,7 @@ void main() {
       expect(seenTokens, containsAll(['idle-token', 'grinding-token']));
       expect(
         snapshots.map((snapshot) => snapshot.observedSetting),
-        containsAll(['501 ddValueDum', '602 ddValueDum']),
+        containsAll(['50', '60']),
       );
       for (final snapshot in snapshots) {
         expect(snapshot.observedRpm, isNull);

@@ -26,9 +26,10 @@ async function withSim(t, options, body, ...needs) {
 test('static token over ws publishes state and DD observations driven by the simulator', (t) => withSim(t, {}, async (sim, keep) => {
   const {session} = keep(await loadPlugin({InstancesJson: instance(sim, {scheme: 'ws'}), TokensJson: token(sim.token)}));
   await session.connect();
-  assert.deepEqual(last(session), {state: 'idle', observedSetting: '5000 ddValueDum'});
-  await control(sim, '/sim/action', {suffix: 'SetAgsaTargetDdValue', data: {targetDdValue: 4321}});
-  await until(() => last(session).observedSetting === '4321 ddValueDum', 'DD 4321');
+  assert.deepEqual(last(session), {state: 'idle', observedSetting: '500'});
+  await control(sim, '/sim/action', {suffix: 'SetAgsaTargetDdValue', data: {targetDdValue: 4325}});
+  await until(() => last(session).observedSetting === '433', 'DD 4325 shown as 433');
+  assert.equal((await session.diagnostics()).body.state.ddValueDum, 4325, 'raw coordinate stays in diagnostics');
   await control(sim, '/sim/action', {suffix: 'StartGrindManual', data: {}});
   await until(() => last(session).state === 'grinding', 'grinding');
   await control(sim, '/sim/action', {suffix: 'Stop', data: {}});
@@ -64,7 +65,7 @@ test('password minting over pinned https and wss', (t) => {
     const {session} = keep(await loadPlugin({InstancesJson: instance(sim, {restPort: sim.httpPort, certSha256: cert.sha256}), TokensJson: '{}',
       MintTokens: 'true', PasswordsJson: password('sim-password')}, {fetchLog, openLog, notices}));
     await session.connect();
-    assert.deepEqual(last(session), {state: 'idle', observedSetting: '5000 ddValueDum'});
+    assert.deepEqual(last(session), {state: 'idle', observedSetting: '500'});
     assert.equal(fetchLog[0].url, `https://127.0.0.1:${sim.httpPort}/rest_api/login`);
     assert.equal(JSON.parse(fetchLog[0].init.body).userRole, 'Owner');
     assert.equal(fetchLog[0].init.tlsPinSha256, cert.sha256.replace(/:/g, '').toLowerCase());
@@ -145,11 +146,11 @@ test('a simulator restart disconnects the session and a reconnect re-mints', (t)
 test('replays the real 2026-11-19 grind capture through the plugin', (t) => withSim(t, {replay: replayTrace}, async (sim, keep) => {
   const {session} = keep(await loadPlugin({InstancesJson: instance(sim, {scheme: 'ws'}), TokensJson: token(sim.token)}));
   await session.connect();
-  assert.deepEqual(last(session), {state: 'idle', observedSetting: '819 ddValueDum'});
+  assert.deepEqual(last(session), {state: 'idle', observedSetting: '82'});
   for (const [seconds, state] of [[28, 'grinding'], [35, 'unknown'], [38, 'idle']]) {
     await control(sim, '/sim/replay/seek', {t: seconds});
     await until(() => last(session).state === state, `${state} at ${seconds}s`);
-    assert.equal(last(session).observedSetting, '819 ddValueDum');
+    assert.equal(last(session).observedSetting, '82');
   }
   const known = (await session.diagnostics()).body.state;
   assert.equal(known.grindState, 'Idle');

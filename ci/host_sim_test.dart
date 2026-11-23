@@ -161,14 +161,14 @@ void main() {
         const Duration(seconds: 5),
       );
       expect(first.state, GrinderState.idle);
-      expect(first.observedSetting, '5000 ddValueDum');
+      expect(first.observedSetting, '500');
 
       await control('/sim/action', {
         'suffix': 'SetAgsaTargetDdValue',
-        'data': {'targetDdValue': 4321},
+        'data': {'targetDdValue': 4325},
       });
       await device.currentSnapshot
-          .firstWhere((snapshot) => snapshot.observedSetting == '4321 ddValueDum')
+          .firstWhere((snapshot) => snapshot.observedSetting == '433')
           .timeout(const Duration(seconds: 5));
       await control('/sim/action', {'suffix': 'StartGrindManual', 'data': {}});
       await device.currentSnapshot
@@ -195,7 +195,7 @@ void main() {
         'query': {'deviceId': device.deviceId},
       });
       final state = (jsonDecode(known['body'] as String) as Map)['state'] as Map;
-      expect(state['ddValueDum'], 4321);
+      expect(state['ddValueDum'], 4325);
       expect(state.containsKey('sessionId'), isFalse);
       for (final response in [connection, known]) {
         expect(response['body'], isNot(contains('sim-password')));

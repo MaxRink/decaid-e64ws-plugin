@@ -14,7 +14,7 @@ void main() {
       expect(path, isNotNull);
       final package = resolvePluginPackage(Directory(path!));
       expect(package.manifest.id, 'mahlkoenig-e64.reaplugin');
-      expect(package.manifest.version, '0.4.3');
+      expect(package.manifest.version, '0.4.4');
       final driver = package.manifest.drivers.single;
       expect(driver.type.name, 'grinder');
       expect(driver.grinderCapabilities, isEmpty);

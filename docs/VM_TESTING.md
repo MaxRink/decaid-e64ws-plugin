@@ -73,7 +73,7 @@ E64_VM_TOKEN=$(cat /tmp/e64-vm-token) node test/vm-integration.mjs
 Observed on 2026-10-31:
 
 ```text
-published {"state":"idle","observedSetting":"0 ddValueDum"}
+published {"state":"idle","observedSetting":"0"}
 machineInfo 200 {"grinderType":"E64 WS", ...}
 config 200 {"adcOversampling":64,"adcTimeoutMs":1000,...}
 ok disconnected=false

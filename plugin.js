@@ -321,7 +321,9 @@ function createPlugin(host) {
       clearTimeout(instance.observationExpiry); instance.observationExpiry = null;
       const snapshot = {state: stateOf(message.data)};
       if (message.data.ddSensorFailed === false && Number.isSafeInteger(message.data.ddValueDum) && message.data.ddValueDum >= 0) {
-        snapshot.observedSetting = String(message.data.ddValueDum) + " ddValueDum";
+        // The grinder's own display value in micrometres: HMI AbstractAgsaDdSensor::ddValueUm()
+        // computes (dd + 5) / 10 with integer division, so 827 shows as 83.
+        snapshot.observedSetting = String(Math.floor((message.data.ddValueDum + 5) / 10));
         instance.observationExpiry = setTimeout(() => {
           if (instance.epoch !== epoch || !instance.connected || instance.observations.state !== observed) return;
           instance.observationExpiry = null;

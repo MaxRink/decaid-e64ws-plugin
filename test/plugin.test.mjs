@@ -15,8 +15,9 @@ function load(settings, fixture, timers = {}, fetchImpl = null) {
 
 test('publishes only sensor-valid raw setting observations from native state responses', async () => {
   for (const [data, expected] of [
-    [{grindState: 'Grinding', ddValueDum: 501, ddSensorFailed: false, fan1TachoRpm: 900}, {state: 'grinding', observedSetting: '501 ddValueDum'}],
-    [{grindState: 'Idle', ddValueDum: 0, ddSensorFailed: false}, {state: 'idle', observedSetting: '0 ddValueDum'}],
+    [{grindState: 'Grinding', ddValueDum: 501, ddSensorFailed: false, fan1TachoRpm: 900}, {state: 'grinding', observedSetting: '50'}],
+    [{grindState: 'Idle', ddValueDum: 0, ddSensorFailed: false}, {state: 'idle', observedSetting: '0'}],
+    ...[[4, '0'], [5, '1'], [824, '82'], [825, '83'], [827, '83'], [829, '83'], [835, '84']].map(([dd, shown]) => [{grindState: 'Idle', ddValueDum: dd, ddSensorFailed: false}, {state: 'idle', observedSetting: shown}]),
     [{grindState: 'unrecognized', state: 'idle', ddValueDum: 500}, {state: 'unknown'}],
     [{grindState: 'Grinding', grindFailure: true, ddValueDum: 500, ddSensorFailed: true}, {state: 'error'}],
     ...[null, '500', -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map(value => [{grindState: 'Idle', ddValueDum: value, ddSensorFailed: false}, {state: 'idle'}]),
@@ -69,7 +70,7 @@ test('one-shot readings expire even when polling is disabled', async () => {
   await connected;
   [...pending.values()].find(timer => timer.delay === 5000).callback();
   await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(published, [{state: 'idle', observedSetting: '501 ddValueDum'}, {state: 'idle'}]);
+  assert.deepEqual(published, [{state: 'idle', observedSetting: '50'}, {state: 'idle'}]);
   await loaded.plugin.onUnload();
 });
 function transport(fixture) {
@@ -233,7 +234,7 @@ test('replays the live 2026-11-18 state and config capture', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   answer(fixture, 0, state);
   await connected;
-  assert.deepEqual(JSON.parse(JSON.stringify(fixture.published)), {state: 'idle', observedSetting: '854 ddValueDum'});
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.published)), {state: 'idle', observedSetting: '85'});
   const deviceId = 'plugin:mahlkoenig-e64.reaplugin:e64:live';
   const info = loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId, read: 'machineInfo'}});
   await new Promise((resolve) => setImmediate(resolve));
@@ -275,7 +276,7 @@ test('mints a token from a configured Owner password', async () => {
   assert.match(fixture.url, /token=minted-token$/);
   answer(fixture, 0, {grindState: 'Idle', ddValueDum: 854, ddSensorFailed: false});
   await connected;
-  assert.deepEqual(JSON.parse(JSON.stringify(fixture.published)), {state: 'idle', observedSetting: '854 ddValueDum'});
+  assert.deepEqual(JSON.parse(JSON.stringify(fixture.published)), {state: 'idle', observedSetting: '85'});
   await loaded.plugin.onUnload();
 });
 
