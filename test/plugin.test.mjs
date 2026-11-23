@@ -1267,3 +1267,34 @@ test('grinder extras writes keep a concurrent dial-in key and retry a clobbered 
   assert.equal(hostile.calls.filter((call) => call.method === 'PUT').length, 3);
   assert.deepEqual([failed.inventory.status, failed.inventory.lastError], ['error', '/api/v1/grinders write conflict HTTP 409']);
 });
+
+test('plugin-level diagnostics without a deviceId default to one instance or offer a picker', async () => {
+  const get = (plugin, query) => plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query});
+  const single = await load({InstancesJson: one('127.0.0.1', {pollMs: 0}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}})}, {sent: [], events: []});
+  const json = await get(single.plugin, {read: 'connection'});
+  assert.deepEqual([json.status, JSON.parse(json.body).connected], [200, false]);
+  const page = await get(single.plugin, {ui: '1'});
+  assert.match(page.headers['Content-Type'], /^text\/html/);
+  assert.ok(page.body.includes('<h1>One</h1>'));
+  await single.plugin.onUnload();
+
+  const two = JSON.stringify([{id: 'a', name: 'Bar <E64>', host: '127.0.0.1', port: 1, pollMs: 0}, {id: 'b', name: 'Kitchen', host: '127.0.0.1', port: 2, pollMs: 0}]);
+  const multi = await load({InstancesJson: two, TokensJson: JSON.stringify({a: {host: '127.0.0.1', token: 'x'}, b: {host: '127.0.0.1', token: 'y'}})}, {sent: [], events: []});
+  const list = await get(multi.plugin, {});
+  assert.deepEqual([list.status, JSON.parse(list.body)], [400, {error: 'deviceId required', instances: [
+    {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:a', name: 'Bar <E64>'}, {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:b', name: 'Kitchen'}]}]);
+  const picker = await get(multi.plugin, {ui: '1', theme: 'dark', lang: 'de', returnTo: 'javascript:alert(1)'});
+  assert.equal(picker.status, 200);
+  assert.ok(picker.body.includes('Bar &lt;E64&gt;') && !picker.body.includes('Bar <E64>'));
+  assert.ok(picker.body.includes('href="?ui=1&amp;deviceId=plugin%3Amahlkoenig-e64.reaplugin%3Ae64%3Ab&amp;theme=dark&amp;lang=de"'));
+  assert.equal(picker.body.includes('javascript:'), false);
+  assert.equal((await get(multi.plugin, {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:b'})).status, 200);
+  assert.equal((await get(multi.plugin, {deviceId: 'nope'})).status, 404);
+  await multi.plugin.onUnload();
+
+  const empty = await load({}, {sent: [], events: []});
+  const none = await get(empty.plugin, {ui: '1'});
+  assert.ok(none.body.includes('No grinder is set up yet.') && none.body.includes('href="setup?"'));
+  assert.equal((await get(empty.plugin, {})).status, 404);
+  await empty.plugin.onUnload();
+});

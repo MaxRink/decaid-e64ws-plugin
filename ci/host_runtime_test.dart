@@ -138,6 +138,9 @@ void main() {
               'pollMs': 0,
             },
           ]),
+          // This test covers the mock protocol only; inventory writes would reach
+          // whatever serves 127.0.0.1:8080, such as the simulator test running alongside.
+          'PopulateGrinderRecord': 'false',
           'TokensJson': jsonEncode({
             'idle': {'host': '127.0.0.1', 'token': 'idle-token'},
             'grinding': {'host': '127.0.0.1', 'token': 'grinding-token'},

@@ -98,7 +98,10 @@ existing settings once through Decaid's settings route and then shows the live
 status. The raw JSON settings are hidden from Decaid's settings form; the
 no-password workaround stays available as an advanced setting and is not offered
 by the assistant. Decaid has no network search for plugins yet, so the address
-is entered by hand. `GET <diagnostics>?ui=1` shows the diagnostics as a page.
+is entered by hand. `GET <diagnostics>?ui=1` shows the diagnostics as a page. Without a `deviceId`
+(as the plugin-level diagnostics surface opens it) a single instance is shown
+directly; with several the page offers a picker, and a JSON request gets `400`
+with the list of `deviceId`s.
 
 ## Grind events
 
@@ -284,7 +287,7 @@ See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
 
 ## Installation
 
-Version 0.7.1 requires a Decaid build containing the read-only Grinder observation
+Version 0.7.2 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and the plugin `notifications` permission (#1003), and tracks upstream Decaid
 `main` (verified against `1d74fbf7` on 2026-11-23), in addition to runtime-v2 and validated device
 surfaces. `certSha256` pinning needs a host with `tlsPinSha256` support; older hosts ignore it. The stable `0.8.8` release has not been

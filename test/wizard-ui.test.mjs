@@ -144,3 +144,24 @@ test('reopening keeps the saved password and asks again when the address changes
   await next.click();
   await expect(page.locator('#pwOut')).toContainText('Enter the Owner password');
 });
+
+test('the diagnostics surface works without a deviceId at phone width', async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  host.store.settings = {InstancesJson: JSON.stringify([{id: 'a', name: 'Bar E64', scheme: 'wss', host: '192.168.1.40', port: 9997, pollMs: 1000}]), TokensJson: JSON.stringify({a: {host: '192.168.1.40', token: 't'}})};
+  await host.reload();
+  await page.goto(`${origin}${base}/e64-diagnostics?ui=1&theme=dark`);
+  await expect(page.getByRole('heading', {name: 'Bar E64'})).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.dataset.theme)).toBe('dark');
+
+  host.store.settings = {InstancesJson: JSON.stringify([{id: 'a', name: 'Bar E64', scheme: 'wss', host: '192.168.1.40', port: 9997, pollMs: 1000},
+    {id: 'b', name: 'Kitchen E64', scheme: 'wss', host: '192.168.1.41', port: 9997, pollMs: 1000}]),
+    TokensJson: JSON.stringify({a: {host: '192.168.1.40', token: 't'}, b: {host: '192.168.1.41', token: 'u'}})};
+  await host.reload();
+  await page.goto(`${origin}${base}/e64-diagnostics?ui=1&theme=light`);
+  await expect(page.getByRole('heading', {name: 'E64 diagnostics'})).toBeVisible();
+  const overflow = await page.evaluate(() => document.scrollingElement.scrollWidth - window.innerWidth);
+  expect(overflow).toBeLessThanOrEqual(0);
+  await page.getByRole('link', {name: /open/}).nth(1).click();
+  await expect(page.getByRole('heading', {name: 'Kitchen E64'})).toBeVisible();
+  expect(new URL(page.url()).searchParams.get('theme')).toBe('light');
+});

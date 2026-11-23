@@ -1327,6 +1327,17 @@ $("save").addEventListener("click", async () => {
 });
 load();
 `;
+  function instancePicker(registered, query) {
+    // Keep the page parameters the kit understands; anything else is dropped.
+    const keep = ["theme", "lang", "embed"].filter((key) => typeof query[key] === "string" && /^[A-Za-z0-9-]{1,16}$/.test(query[key]))
+      .map((key) => "&" + key + "=" + encodeURIComponent(query[key])).join("");
+    const body = registered.length
+      ? "<div class=\"pu-card\">" + registered.map((instance) => "<div class=\"pu-row\"><b>" + escapeHtml(instance.config.name) + "</b><a class=\"pu-btn pu-secondary\" href=\"?ui=1&amp;deviceId=" +
+          escapeHtml(encodeURIComponent(instance.deviceId)) + escapeHtml(keep) + "\">" + (instance.connected ? "Connected" : "Not connected") + " – open</a></div>").join("") + "</div>"
+      : "<div class=\"pu-alert pu-warn\">No grinder is set up yet.</div><div class=\"pu-actions\"><a class=\"pu-btn\" href=\"setup?" + escapeHtml(keep.slice(1)) + "\">Set up</a></div>";
+    return htmlPage("E64 diagnostics", "<header class=\"pu-header\"><h1>E64 diagnostics</h1><button type=\"button\" class=\"pu-btn pu-secondary\" data-pu-done>Done</button></header>" +
+      (registered.length ? "<p class=\"pu-muted\">Choose a grinder.</p>" : "") + body, "pu.init({fit: true});");
+  }
   function diagnosticsPage(instance) {
     const {syncing, ...inventory} = instance.inventory;
     const rows = [["Connected", instance.connected ? "yes" : "no"], ["Display", instance.workflow.display === null ? "–" : instance.workflow.display + " µm"],
@@ -1426,7 +1437,16 @@ load();
       if (request.endpoint !== "e64-diagnostics" && request.endpoint !== "grind-events") return jsonResponse(404, {error: "unknown endpoint"});
       if (request.method !== "GET") return jsonResponse(405, {error: "method not allowed"});
       const id = request.query && request.query.deviceId;
-      const instance = Array.from(instances.values()).find((candidate) => candidate.deviceId === id);
+      const registered = Array.from(instances.values()).filter((candidate) => candidate.deviceId !== null);
+      // Skins open the plugin-level diagnostics surface without a deviceId: one instance is the default,
+      // several get a picker page (ui=1) or a list of deviceIds (JSON).
+      const instance = id === undefined ? (registered.length === 1 ? registered[0] : null) : registered.find((candidate) => candidate.deviceId === id);
+      if (!instance && id === undefined && request.query.ui === "1") return instancePicker(registered, request.query);
+      if (!instance && id === undefined) {
+        return jsonResponse(registered.length ? 400 : 404, registered.length
+          ? {error: "deviceId required", instances: registered.map((candidate) => ({deviceId: candidate.deviceId, name: candidate.config.name}))}
+          : {error: needsSetup ? "needs setup" : "no grinder configured"});
+      }
       if (!instance) return {status: 404, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unknown instance"})};
       const grindEvents = () => instance.grindEvents.map(({completedAtMs, ...event}) => event);
       if (request.endpoint === "grind-events") return jsonResponse(200, {events: grindEvents(), log: instance.grindLog, grinderId: instance.inventory.grinderId});
