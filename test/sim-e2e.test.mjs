@@ -240,7 +240,7 @@ test('debug mode enables start/stop, grind-setting writes, grind events and back
     plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'sleeping', substate: 'idle'}}});
     await until(async () => (await control(sim, '/sim/state')).events.some((e) => e.event === 'backlight' && e.brightness === 0), 'backlight off');
     plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'idle', substate: 'idle'}}});
-    await until(async () => (await control(sim, '/sim/state')).events.at(-1).brightness === 100, 'backlight restored');
+    await until(async () => (await control(sim, '/sim/state')).events.filter((e) => e.event === 'backlight').at(-1)?.brightness === 100, 'backlight restored');
     const actions = (await control(sim, '/sim/state')).events.map((e) => e.event);
     assert.equal(actions.includes('brew_event'), false, 'decaid ownership never sends brew events');
     assert.equal((await session.diagnostics('control')).body.lastAction.ok, true);
