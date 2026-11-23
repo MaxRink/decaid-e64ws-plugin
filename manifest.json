@@ -3,7 +3,7 @@
   "name": "Mahlk\u00f6nig E64",
   "author": "Decaid contributors",
   "description": "Read-only Mahlk\u00f6nig E64 grinder telemetry over WebSocket.",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "apiVersion": 1,
   "permissions": [
     "api",
@@ -108,11 +108,30 @@
       "label": "Grind adjustment owner",
       "description": "off: no brew events and no grind-setting writes. grinder: report finished Decaid shots to the grinder's own grind-by-sync as brew events. decaid: allow grind-setting writes from Decaid, never send brew events. Default off.",
       "default": "off"
+    },
+    "PopulateGrinderRecord": {
+      "type": "enum",
+      "values": ["true", "false"],
+      "label": "Add the grinder to Decaid's inventory",
+      "description": "On connect, keep one Decaid grinder record per instance (created once, or an existing E64 record adopted). Only plugin-owned extras are updated afterwards; an archived record is left alone. Default true.",
+      "default": "true"
+    },
+    "LinkWorkflowGrinder": {
+      "type": "enum",
+      "values": ["true", "false"],
+      "label": "Link the workflow to this grinder",
+      "description": "When the current workflow names no grinder, set its grinder to this record. An existing grinder choice is never replaced. Default true.",
+      "default": "true"
     }
   },
   "api": [
     {
       "id": "grind-events",
+      "type": "http",
+      "data": {}
+    },
+    {
+      "id": "service-log",
       "type": "http",
       "data": {}
     },

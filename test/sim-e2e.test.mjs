@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
 import {spawn} from 'node:child_process';
-import {control, freePort, loadPlugin, makeCert, replayTrace, requireSim, startSim, until} from './support/sim-host.mjs';
+import {control, decaidApi, freePort, loadPlugin, makeCert, replayTrace, requireSim, startSim, until} from './support/sim-host.mjs';
 
 const instance = (sim, extra = {}) => JSON.stringify([{id: 'sim', name: 'Sim E64', host: '127.0.0.1', port: sim.port, pollMs: 100, ...extra}]);
 const token = (value) => JSON.stringify({sim: {host: '127.0.0.1', token: value}});
@@ -138,7 +138,7 @@ test('a simulator restart disconnects the session and a reconnect re-mints', (t)
     const restarted = await startSim({tlsCert: cert, httpsCert: cert, ports: sim.ports});
     sim.stop = restarted.stop;
     await session.connect();
-    assert.equal(fetchLog.length, 2, 'a fresh token is minted for the new session');
+    assert.equal(fetchLog.filter(({url}) => url.endsWith('/rest_api/login')).length, 2, 'a fresh token is minted for the new session');
     assert.equal((await session.diagnostics('connection')).body.connected, true);
   });
 });
@@ -320,4 +320,50 @@ test('the replayed real grind is matched to its grind-log row', (t) => {
     assert.equal(event.log.setting, '82', 'grind_ddd 819 shown as 82');
     assert.equal(event.recipe.mode, 'GbW');
   }, replayTrace);
+});
+
+test('connecting fills the Decaid grinder inventory and the empty workflow grinder', (t) => withSim(t, {devGate: 'locked'}, async (sim, keep) => {
+  const decaid = decaidApi({workflow: {context: {targetYield: 36, grinderSetting: '82'}, profile: {title: 'Adaptive'}}});
+  const {session} = keep(await loadPlugin({InstancesJson: instance(sim, {scheme: 'ws'}), TokensJson: token(sim.token)}, {decaid}));
+  await session.connect();
+  await until(async () => (await session.diagnostics('inventory')).body.workflowLink === 'linked', 'inventory sync');
+  const [record] = decaid.grinders;
+  assert.equal(record.model, 'Mahlkönig E64 WS');
+  assert.deepEqual(record.extras.deviceId, 'plugin:mahlkoenig-e64.reaplugin:e64:sim');
+  assert.deepEqual(decaid.workflow, {context: {targetYield: 36, grinderSetting: '82', grinderId: record.id, grinderModel: 'Mahlkönig E64 WS'}, profile: {title: 'Adaptive'}});
+  assert.equal((await session.diagnostics('grind-events')).body.grinderId, record.id);
+  await session.disconnect();
+  await session.connect();
+  const listed = () => decaid.calls.filter((call) => call.method === 'GET' && call.path.startsWith('/api/v1/grinders')).length;
+  await until(() => listed() === 2 && decaid.calls.at(-1).path === '/api/v1/workflow', 'second sync');
+  assert.equal(decaid.grinders.length, 1, 'the reconnect finds its own record');
+  assert.equal(decaid.calls.filter((call) => call.method !== 'GET').length, 2, 'only the first sync wrote');
+}));
+
+test('the service log comes from the same coalesced download, redacted and incremental', (t) => {
+  const cert = makeCert();
+  return withSim(t, {tlsCert: cert, httpsCert: cert, devGate: 'locked'}, async (sim, keep) => {
+    const {session, plugin} = keep(await loadPlugin({InstancesJson: instance(sim, {restPort: sim.httpPort, certSha256: cert.sha256}), TokensJson: '{}',
+      MintTokens: 'true', PasswordsJson: password('sim-password')}));
+    await session.connect();
+    for (let i = 0; i < 2; i++) {
+      await control(sim, '/sim/action', {suffix: 'StartGrindGbw', data: {targetWeightGr: 18}});
+      await until(() => last(session).state === 'grinding', 'grinding');
+      await control(sim, '/sim/action', {suffix: 'Stop', data: {}});
+      await until(() => last(session).state === 'idle', 'idle');
+    }
+    await until(async () => (await session.diagnostics('grind-events')).body.log.status === 'ok', 'log download');
+    const service = (query) => JSON.parse(plugin.handleHttpRequest({endpoint: 'service-log', method: 'GET', query}).body);
+    const {rows, log} = service({instance: 'sim'});
+    assert.deepEqual(rows.map((row) => row.eventType), ['PowerOn', 'WifiConnected', 'SerialNumberRead', 'LogIn']);
+    const text = JSON.stringify(rows);
+    for (const secret of ['sim-wifi-secret', '192.168.77.23', '02:00:5e:10:00:01', '000000123456', '0123456789abcdef0123456789abcdef', 'SimHomeNet']) assert.equal(text.includes(secret), false, secret);
+    assert.deepEqual(service({instance: 'sim', after: String(rows[2].id)}).rows.map((row) => row.eventType), ['LogIn']);
+    assert.equal(log.status, 'ok');
+    const simEvents = (await control(sim, '/sim/state')).events.map((event) => event.event);
+    assert.equal(simEvents.filter((event) => event === 'machine_logs_downloaded').length, 1, 'two grinds, one download');
+    const [newest, older] = (await session.diagnostics('grind-events')).body.events;
+    assert.ok(older.grindUuid, 'the first grind is enriched by the immediate download');
+    assert.equal(newest.grindUuid, null, 'the second grind waits for the next coalesced download, 10 minutes later');
+  });
 });

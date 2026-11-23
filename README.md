@@ -93,19 +93,73 @@ displayed setting. The latest 20 per instance are returned by
 and appear as `grindEvents` in the default diagnostics view, with no serial
 number or session ID.
 
-With `MintTokens`, each completed grind also triggers one Owner-session
-`POST /rest_api/download_machine_logs` (pinned, on `restPort`). The plugin reads
-the `GrindLogs` CSV from the ZIP with its own ZIP, DEFLATE and CSV reader, takes
-the newest unused row whose `recipe_amount` matches the observed target (±0.5 g)
-and whose `grind_date_time` is within 10 minutes of the observed completion,
-and adds `grindUuid`, a `log` block (grind weight, duration, displayed setting
-from `grind_ddd`, success) and a `recipe` block (index, UUID, mode, type, dose,
+With `MintTokens`, the plugin reads the grinder's own logs from
+`POST /rest_api/download_machine_logs` (pinned, on `restPort`) with its own ZIP,
+DEFLATE and CSV reader. From the `GrindLogs` CSV it takes the newest unused row
+whose `recipe_amount` matches the observed target (±0.5 g) and whose
+`grind_date_time` is within 10 minutes of the observed completion, and adds
+`grindUuid`, a `log` block (grind weight, duration, displayed setting from
+`grind_ddd`, success) and a `recipe` block (index, UUID, mode, type, dose,
 displayed coarseness, brew time and weight). Weights are read in the firmware's
-10⁻³ g encoding. A failed download backs off like a failed login (5 s doubling
-to 5 min); the grind-events response reports the status under `log`. This needs
-a Decaid host whose plugin `fetch` supports `responseType: "base64"` and
-`response.base64()`. On older hosts the plugin detects the missing method once,
-marks the log `unsupported-host` and keeps `grindUuid` `null`.
+10⁻³ g encoding. This needs a Decaid host whose plugin `fetch` supports
+`responseType: "base64"`; on older hosts the plugin detects that once, marks the
+log `unsupported-host` and keeps `grindUuid` `null`.
+
+Every download writes a ZIP to the grinder's `/tmp` and checkpoints its SQLite
+WAL, so downloads are deliberately rare:
+
+- after a completed grind, at most one download per 10 minutes; grinds in
+  between wait for the next download and are matched together;
+- otherwise one refresh per 6 hours while connected (the first one 60 s after
+  connecting when none ran in the last 6 hours);
+- a failed attempt also waits 10 minutes, and three failures in a row stop
+  downloads until the next successful connection.
+
+Downloads reuse the Owner session the plugin already opened to mint the
+connection's WebSocket token. Only when the grinder refuses that session does
+the plugin log in once more and retry. The grinder records a `LogIn` service
+event for each login, so expect one per connection plus one per download whose
+session had expired; the firmware's own session lifetime decides how often that
+is.
+
+`GET /api/v1/plugins/mahlkoenig-e64.reaplugin/service-log?instance=<id>` (or
+`deviceId=`; optional `after=<event_id>`) returns the `ServiceLogs` rows from the
+same downloads in ascending `event_id` order: `id`, `eventTypeId`, `eventType`,
+`eventDateTime` and `details`. Serial numbers, IP and MAC addresses, Wi-Fi names
+and passwords, session IDs, tokens, long hexadecimal IDs and email addresses are
+redacted from the text. Both endpoints report the download status under `log`
+(`ok`, `downloading`, `failed`, `suspended`, `unsupported-host` or
+`needs-mint-tokens`, with `lastAt`, `lastAttemptAt`, `lastError`). Everything is
+held in memory only and bounded: 20 grind events and 500 service rows per
+instance. The plugin persists nothing and never keeps the ZIP or the CSV.
+
+## Grinder inventory
+
+With `PopulateGrinderRecord` (default `"true"`) each successful connection keeps
+one Decaid grinder record per instance, so stored shots name this grinder:
+
+- The plugin looks for its own record (`extras.source` =
+  `mahlkoenig-e64.reaplugin` and `extras.instanceId` = the instance id). Without
+  one it adopts an existing, non-archived record whose model contains `E64` and
+  that no other plugin owns; otherwise it creates `Mahlkönig E64 WS` (or the
+  `E64…` type the grinder reports, never the development-image `Unknown`) with
+  `64 mm flat (stock)` burrs, numeric settings and steps 1/10 in the displayed
+  micrometres.
+- After creation or adoption the record belongs to the user. The plugin never
+  changes its model, burrs, notes, steps or archive state, and only rewrites its
+  own `extras` (`source`, `instanceId`, `unit`, `deviceId`, `lastSeenAt` at most
+  once a day). No serial number or network detail is stored. An archived record
+  is left archived and not recreated.
+- With `LinkWorkflowGrinder` (default `"true"`) the plugin sets the workflow's
+  `grinderId` and `grinderModel` only when the workflow names no grinder, through
+  a partial `PUT /api/v1/workflow` that leaves every other field unchanged.
+
+`GET <diagnostics>?read=inventory` reports `status` (`created`, `adopted`,
+`linked`, `archived`, `disabled` or `error`), `grinderId`, `model`, `archived`,
+`workflowLink` (`linked`, `kept-existing` or `disabled`), `duplicates` (extra records this
+instance owns, for example after a reload raced a creation; the oldest is used and
+none is deleted) and `lastError`. The
+grind-events response includes `grinderId`.
 
 ## Grinder control
 
@@ -186,7 +240,7 @@ See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
 
 ## Installation
 
-Version 0.5.0 requires a Decaid build containing the read-only Grinder observation
+Version 0.6.0 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and the plugin `notifications` permission (#1003), and tracks upstream Decaid
 `main` (verified against `1d74fbf7` on 2026-11-23), in addition to runtime-v2 and validated device
 surfaces. `certSha256` pinning needs a host with `tlsPinSha256` support; older hosts ignore it. The stable `0.8.8` release has not been
@@ -314,7 +368,7 @@ exact installed source revision before these checks count as verified evidence.
 ## Diagnostics and errors
 
 The diagnostics surface accepts `GET` with the host `deviceId`. The supported
-`read` values are none, `config`, `machineInfo`, `connection`, `control` and `xenia`.
+`read` values are none, `config`, `machineInfo`, `connection`, `control`, `inventory` and `xenia`.
 With no `read` parameter it returns last-known observations, including the
 latest polled `state`, which may remain available after disconnection; there is
 no separate `read=state`. Reconnecting starts a fresh observation set.

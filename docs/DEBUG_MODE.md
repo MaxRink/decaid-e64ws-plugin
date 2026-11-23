@@ -63,6 +63,14 @@ language, setup-wizard or configuration-write commands.
 A failed control action raises a Decaid notification for that instance, which
 is withdrawn after the next successful action.
 
+## Grinder load
+
+Control adds no background traffic of its own: actions are only sent when Decaid
+calls them, and backlight sync sends one command per machine sleep or wake. Grind
+logs used by brew events follow the download limits in the README (at most one
+download per 10 minutes after grinds, one idle refresh per 6 hours, suspended
+after three failures until the next connection).
+
 ## Risks
 
 - A development image enables every development command, not only the ones this

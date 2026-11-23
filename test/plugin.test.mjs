@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import zlib from 'node:zlib';
 import crypto from 'node:crypto';
+import {decaidApi, hostFetch} from './support/sim-host.mjs';
 
 const source = fs.readFileSync(new URL('../plugin.js', import.meta.url), 'utf8');
 function load(settings, fixture, timers = {}, fetchImpl = null) {
@@ -12,7 +13,9 @@ function load(settings, fixture, timers = {}, fetchImpl = null) {
   const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent, btoa: globalThis.btoa, ...(fetchImpl ? {fetch: fetchImpl} : {}), ...timers};
   vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
   const plugin = sandbox.createPlugin(host);
-  return plugin.onLoad(settings).then(() => ({plugin, registrations}));
+  // Inventory sync has its own tests; elsewhere it would add a RequestNachineInfo to every connect.
+  const effective = settings && !('PopulateGrinderRecord' in settings) ? {...settings, PopulateGrinderRecord: 'false'} : settings;
+  return plugin.onLoad(effective).then(() => ({plugin, registrations}));
 }
 
 test('publishes only sensor-valid raw setting observations from native state responses', async () => {
@@ -803,51 +806,228 @@ test('csv parser handles quotes, escaped quotes, CRLF and semicolons', async () 
   assert.deepEqual(plain(parseCsv('﻿a;b\n1;2\n')), [['a', 'b'], ['1', '2']]);
 });
 
-test('a completed grind downloads the grind log and attaches the matching row', async () => {
+async function logHarness({zip, failDownloads = false, binary = true, refuse = () => false} = {}) {
+  let now = Date.parse('2026-11-23T12:00:00Z');
+  class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const pending = new Map(); let nextTimer = 0;
-  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay}); return id;}, clearTimeout: id => pending.delete(id)};
-  const stamp = (offsetMin) => { const d = new Date(Date.now() + offsetMin * 60000), p = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
-  const header = 'grind_id,grind_uuid,grind_date_time,grind_ddd,grind_duration,grind_weight,grind_successfull,recipe_index,recipe_uuid,recipe_mode,recipe_amount,recipe_type,recipe_coarseness,recipe_brew_time,recipe_brew_weight';
-  const csv = [header, `3,uuid-other-dose,${stamp(0)},820,8000,20100,1,2,r2,GbW,20000,Lungo,600,30000,40000`,
-    `2,uuid-match,${stamp(0)},819,8300,18070,1,1,r1,GbW,18000,"Espresso, double",500,27000,36000`,
-    `1,uuid-too-old,${stamp(-60)},819,8300,18000,1,1,r1,GbW,18000,Espresso,500,27000,36000`].join('\n');
-  const zip = zipOf([{name: 'HemroE64WSGrindLogs_SN1_x.csv', data: csv, method: 8}]);
+  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay, at: now + delay}); return id;}, clearTimeout: id => pending.delete(id), Date: FakeDate};
   const calls = [];
-  let binary = true;
   const fetchImpl = async (url, init) => {
     calls.push({url, init});
-    if (url.endsWith('/login')) return {ok: true, status: 200, headers: {get: (name) => name === 'authorization' ? 'Bearer t' : 'PHPSESSID=abc; path=/'}, text: async () => ''};
-    return {ok: true, status: 200, headers: {get: () => null}, text: async () => '', ...(binary ? {base64: async () => zip.toString('base64')} : {})};
+    if (url.endsWith('/login')) return {ok: true, status: 200, headers: {get: (name) => name === 'authorization' ? `Bearer t${calls.length}` : 'PHPSESSID=abc; path=/'}, text: async () => ''};
+    if (failDownloads) return {ok: false, status: 503, headers: {get: () => null}, base64: async () => ''};
+    if (refuse(init)) return {ok: false, status: 400, headers: {get: () => null}, base64: async () => ''};
+    return {ok: true, status: 200, headers: {get: () => null}, ...(binary ? {base64: async () => zip.toString('base64')} : {})};
   };
   const fixture = {sent: [], events: []};
   const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100, restPort: 8443}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})}, fixture, timers, fetchImpl);
-  const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
-  await new Promise(resolve => setImmediate(resolve));
-  answer(fixture, 0, {grindState: 'Grind', ddValueDum: 819, ddSensorFailed: false});
-  await connected;
-  const grind = async (index) => {
-    const poll = [...pending.entries()].find(([, timer]) => timer.delay === 100);
-    pending.delete(poll[0]); poll[1].callback();
-    answer(fixture, index, {grindState: index % 2 ? 'Idle' : 'Grind', ddValueDum: 819, ddSensorFailed: false, grindTargetWeightGr: 18});
-    for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve));
+  const settle = async () => {
+    for (let i = 0; i < 8; i++) {
+      await new Promise(resolve => setImmediate(resolve));
+      for (const [id, timer] of [...pending.entries()]) if (timer.delay !== 100 && timer.delay !== 5000 && timer.at <= now) { pending.delete(id); timer.callback(); }
+    }
   };
-  await grind(1);
+  let answered = 0;
+  const connect = async () => {
+    fixture.sent = []; answered = 0;
+    const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
+    await settle();
+    answer(fixture, answered++, {grindState: 'Idle', ddValueDum: 819, ddSensorFailed: false, grindTargetWeightGr: 18});
+    await connected;
+  };
+  const poll = async (grindState) => {
+    const entry = [...pending.entries()].find(([, timer]) => timer.delay === 100);
+    pending.delete(entry[0]); entry[1].callback();
+    answer(fixture, answered++, {grindState, ddValueDum: 819, ddSensorFailed: false, grindTargetWeightGr: 18});
+    await settle();
+  };
+  const grind = async () => { await poll('Grind'); await poll('Idle'); };
+  const logTimers = () => [...pending.entries()].filter(([, timer]) => timer.delay !== 100 && timer.delay !== 5000);
+  const advance = async (ms) => {
+    now += ms;
+    for (const [id, timer] of logTimers()) if (timer.at <= now) { pending.delete(id); timer.callback(); }
+    await settle();
+  };
+  const downloads = () => calls.filter((call) => call.url.endsWith('/download_machine_logs')).length;
+  const logins = () => calls.filter((call) => call.url.endsWith('/login')).length;
   const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
-  const body = () => JSON.parse(loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}).body);
-  const download = calls.find((call) => call.url.endsWith('/download_machine_logs'));
+  const events = () => JSON.parse(loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}).body);
+  const service = (extra = {}) => loaded.plugin.handleHttpRequest({endpoint: 'service-log', method: 'GET', query: extra});
+  return {loaded, connect, grind, advance, downloads, logins, events, service, logTimers, calls, disconnect: () => loaded.registrations[0].handlers.disconnect()};
+}
+const stampAt = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+const grindHeader = 'grind_id,grind_uuid,grind_date_time,grind_ddd,grind_duration,grind_weight,grind_successfull,recipe_index,recipe_uuid,recipe_mode,recipe_amount,recipe_type,recipe_coarseness,recipe_brew_time,recipe_brew_weight';
+const serviceHeader = 'event_id,event_type_id,event_type,event_date_time,event_details';
+
+test('grind logs are matched by dose and time, coalesced, and fetched with the connection session', async () => {
+  const at = Date.parse('2026-11-23T12:00:00Z');
+  const grinds = [grindHeader, `3,uuid-other-dose,${stampAt(at)},820,8000,20100,1,2,r2,GbW,20000,Lungo,600,30000,40000`,
+    `2,uuid-match,${stampAt(at)},819,8300,18070,1,1,r1,GbW,18000,"Espresso, double",500,27000,36000`,
+    `1,uuid-too-old,${stampAt(at - 3600000)},819,8300,18000,1,1,r1,GbW,18000,Espresso,500,27000,36000`].join('\n');
+  const services = [serviceHeader, '1,7,PowerOn,2026-11-23 11:00:00,Firmware V01.16 started',
+    '2,8,WifiConnected,2026-11-23 11:00:05,"SSID HomeNet ip 192.168.1.23 mac aa:bb:cc:dd:ee:ff password=hunter2"',
+    '3,9,SerialNumberRead,2026-11-23 11:00:06,Device SN 000000123456 session 0123456789abcdef0123456789abcdef'].join('\n');
+  const zip = zipOf([{name: 'HemroE64WSGrindLogs_SN1_x.csv', data: grinds, method: 8}, {name: 'HemroE64WSServiceLogs_SN1_x.csv', data: services, method: 8}]);
+  const h = await logHarness({zip});
+  await h.connect();
+  assert.equal(h.logins(), 1);
+  assert.equal(h.downloads(), 0, 'no download at connect itself');
+  await h.grind();
+  assert.equal(h.downloads(), 1, 'a completed grind downloads at once');
+  assert.equal(h.logins(), 1, 'the connection session is reused');
+  const download = h.calls.find((call) => call.url.endsWith('/download_machine_logs'));
   assert.equal(download.url, 'https://127.0.0.1:8443/rest_api/download_machine_logs');
-  assert.deepEqual([download.init.method, download.init.responseType, download.init.headers.Cookie], ['POST', 'base64', 'PHPSESSID=abc']);
-  const [event] = body().events;
+  assert.deepEqual([download.init.method, download.init.responseType, download.init.headers.Cookie, download.init.headers.Authorization], ['POST', 'base64', 'PHPSESSID=abc', 'Bearer t1']);
+  const [event] = h.events().events;
   assert.equal(event.grindUuid, 'uuid-match', 'the target weight rules out the newer 20 g row');
   assert.deepEqual(event.recipe, {index: 1, uuid: 'r1', mode: 'GbW', type: 'Espresso, double', amountGr: 18, setting: '50', brewTimeMs: 27000, brewWeightGr: 36});
   assert.deepEqual(event.log, {grindWeightGr: 18.07, grindDurationMs: 8300, setting: '82', successful: true});
-  assert.equal(body().log.status, 'ok');
-  binary = false;
-  await grind(2); await grind(3);
-  assert.equal(body().log.status, 'unsupported-host');
-  const downloads = calls.filter((call) => call.url.endsWith('/download_machine_logs')).length;
-  await grind(4); await grind(5);
-  assert.equal(calls.filter((call) => call.url.endsWith('/download_machine_logs')).length, downloads, 'an older host is not asked again');
+  const service = JSON.parse(h.service().body);
+  assert.equal(service.instance, 'one');
+  assert.deepEqual(service.rows.map((row) => row.id), [1, 2, 3]);
+  assert.equal(service.rows[1].details, 'SSID <redacted> ip <ip> mac <mac> password=<redacted>');
+  assert.equal(service.rows[2].details, 'Device SN<redacted> session <redacted>');
+  assert.deepEqual(JSON.parse(h.service({instance: 'one', after: '2'}).body).rows.map((row) => row.id), [3]);
+  assert.equal(h.service({after: 'x'}).status, 400);
+  assert.equal(h.service({instance: 'nope'}).status, 404);
+  await h.grind(); await h.advance(60000); await h.grind();
+  assert.equal(h.downloads(), 1, 'grinds within 10 minutes are coalesced');
+  assert.equal(h.logTimers().length, 1);
+  await h.advance(9 * 60000);
+  assert.equal(h.downloads(), 2, 'one batched download 10 minutes after the last');
+  await h.advance(5 * 3600000);
+  assert.equal(h.downloads(), 2);
+  await h.advance(3600000);
+  assert.equal(h.downloads(), 3, 'one idle refresh after 6 hours');
+  await h.loaded.plugin.onUnload();
+});
+
+test('log downloads respect old hosts, suspend after repeated failures and stay bounded', async () => {
+  const old = await logHarness({zip: Buffer.alloc(0), binary: false});
+  await old.connect(); await old.grind();
+  assert.equal(old.events().log.status, 'unsupported-host');
+  await old.advance(7 * 3600000); await old.grind();
+  assert.equal(old.downloads(), 1, 'an older host is not asked again');
+  await old.loaded.plugin.onUnload();
+
+  const failing = await logHarness({failDownloads: true});
+  await failing.connect();
+  for (let i = 0; i < 6; i++) { await failing.grind(); await failing.advance(10 * 60000); }
+  assert.equal(failing.downloads(), 3, 'three failures, at least 10 minutes apart, then suspended');
+  assert.equal(failing.events().log.status, 'suspended');
+  const attempts = failing.calls.filter((call) => call.url.endsWith('/download_machine_logs')).length;
+  assert.equal(attempts, 3);
+  await failing.disconnect(); await failing.connect();
+  await failing.grind();
+  assert.equal(failing.downloads(), 4, 'a new connection lifts the suspension');
+  assert.equal(failing.logins(), 2, 'one Owner login per connection');
+  await failing.loaded.plugin.onUnload();
+
+  const rows = [serviceHeader, ...Array.from({length: 700}, (_, i) => `${i + 1},1,LogIn,2026-11-23 10:00:00,Role Owner logged in`)].join('\n');
+  const big = await logHarness({zip: zipOf([{name: 'HemroE64WSServiceLogs_SN1_x.csv', data: rows, method: 8}])});
+  await big.connect();
+  for (let i = 0; i < 30; i++) await big.grind();
+  await big.advance(60000);
+  const kept = JSON.parse(big.service().body).rows;
+  assert.equal(kept.length, 500);
+  assert.deepEqual([kept[0].id, kept.at(-1).id], [201, 700]);
+  assert.equal(big.events().events.length, 20);
+  await big.loaded.plugin.onUnload();
+});
+
+async function inventoryRun({decaid = decaidApi(), extra = {}, grinderType = 'E64 WS', connects = 1} = {}) {
+  const fetchImpl = hostFetch([], decaid);
+  const fixture = {sent: [], events: []};
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 0}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}}), PopulateGrinderRecord: 'true', ...extra}, fixture, {}, fetchImpl);
+  const read = async () => JSON.parse((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'inventory'}})).body);
+  for (let i = 0; i < connects; i++) {
+    fixture.sent = [];
+    const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
+    await new Promise(resolve => setImmediate(resolve));
+    answer(fixture, 0, {grindState: 'Idle', ddValueDum: 819, ddSensorFailed: false});
+    await connected;
+    if (extra.PopulateGrinderRecord !== 'false') {
+      let answered = false;
+      for (let n = 0; n < 40; n++) {
+        await new Promise(resolve => setImmediate(resolve));
+        const index = fixture.sent.findIndex((message) => message.type === 'RequestNachineInfo');
+        if (index >= 0 && !answered) { answered = true; answer(fixture, index, {grinderType, sessionId: 'secret'}); }
+      }
+    }
+  }
+  const inventory = await read();
   await loaded.plugin.onUnload();
+  return {decaid, inventory, writes: decaid.calls.filter((call) => call.method !== 'GET')};
+}
+
+test('connect creates one grinder record and links an empty workflow', async () => {
+  const {decaid, inventory, writes} = await inventoryRun({connects: 2});
+  assert.equal(decaid.grinders.length, 1, 'no duplicate on reconnect');
+  const [record] = decaid.grinders;
+  assert.deepEqual({...record, id: typeof record.id, extras: {...record.extras, lastSeenAt: typeof record.extras.lastSeenAt}}, {
+    id: 'string', archived: false, notes: null, settingValues: null, rpmSmallStep: null, rpmBigStep: null,
+    model: 'Mahlkönig E64 WS', burrs: '64 mm flat (stock)', burrSize: 64, burrType: 'flat', settingType: 'numeric', settingSmallStep: 1, settingBigStep: 10,
+    extras: {source: 'mahlkoenig-e64.reaplugin', instanceId: 'one', unit: 'µm (grinder display)', deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', lastSeenAt: 'string'}});
+  assert.equal(JSON.stringify(decaid.grinders).includes('secret'), false);
+  assert.deepEqual(decaid.workflow.context, {grinderId: record.id, grinderModel: 'Mahlkönig E64 WS'});
+  assert.deepEqual(writes.map((call) => `${call.method} ${call.path}`), ['POST /api/v1/grinders', 'PUT /api/v1/workflow'], 'the second connect writes nothing');
+  assert.deepEqual([inventory.status, inventory.grinderId, inventory.workflowLink, inventory.archived], ['linked', record.id, 'linked', false]);
+});
+
+test('an existing E64 record is adopted, user fields are never overwritten and an archived record is respected', async () => {
+  const userRecord = () => ({id: 'user', model: 'My E64 at home', burrs: 'SSP HU', burrSize: 64, burrType: 'flat', notes: 'mine', archived: false,
+    settingType: 'numeric', settingSmallStep: 0.5, settingBigStep: 5, extras: {color: 'red'}});
+  const other = {id: 'other', model: 'E64 via other plugin', archived: false, extras: {source: 'someone.else'}};
+  const adopted = await inventoryRun({decaid: decaidApi({grinders: [other, userRecord()]})});
+  const record = adopted.decaid.grinders.find((g) => g.id === 'user');
+  assert.deepEqual({...record, extras: {...record.extras, lastSeenAt: 'x'}}, {...userRecord(), extras: {color: 'red', source: 'mahlkoenig-e64.reaplugin', instanceId: 'one',
+    unit: 'µm (grinder display)', deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', lastSeenAt: 'x'}});
+  assert.deepEqual(adopted.writes.filter((call) => call.path.startsWith('/api/v1/grinders')).map((call) => Object.keys(call.body)), [['extras']]);
+  assert.equal(adopted.inventory.status, 'adopted');
+
+  const stale = {...userRecord(), extras: {source: 'mahlkoenig-e64.reaplugin', instanceId: 'one', deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', lastSeenAt: '2020-01-01T00:00:00.000Z'}};
+  const refreshed = await inventoryRun({decaid: decaidApi({grinders: [stale]})});
+  assert.deepEqual(refreshed.writes.filter((call) => call.path.startsWith('/api/v1/grinders')).map((call) => Object.keys(call.body)), [['extras']]);
+  assert.equal(refreshed.decaid.grinders[0].model, 'My E64 at home');
+
+  const archived = await inventoryRun({decaid: decaidApi({grinders: [{...stale, archived: true}]})});
+  assert.deepEqual(archived.writes, [], 'no unarchive, recreate or workflow link');
+  assert.deepEqual([archived.inventory.status, archived.inventory.archived], ['archived', true]);
+});
+
+test('the workflow grinder is only set when empty, and both settings switch the feature off', async () => {
+  for (const context of [{grinderId: 'someone-else'}, {grinderModel: 'Niche Zero'}]) {
+    const run = await inventoryRun({decaid: decaidApi({workflow: {context: {...context, grinderSetting: '12', targetYield: 36}, profile: {title: 'P'}}})});
+    assert.deepEqual(run.decaid.workflow, {context: {...context, grinderSetting: '12', targetYield: 36}, profile: {title: 'P'}});
+    assert.equal(run.inventory.workflowLink, 'kept-existing');
+  }
+  const kept = await inventoryRun({decaid: decaidApi({workflow: {context: {grinderSetting: '12', targetYield: 36}, profile: {title: 'P'}}})});
+  assert.deepEqual(kept.writes.find((call) => call.path === '/api/v1/workflow').body, {context: {grinderId: kept.decaid.grinders[0].id, grinderModel: 'Mahlkönig E64 WS'}});
+  assert.deepEqual(kept.decaid.workflow.context.grinderSetting, '12');
+  const unknown = await inventoryRun({grinderType: 'Unknown', extra: {LinkWorkflowGrinder: 'false'}});
+  assert.equal(unknown.decaid.grinders[0].model, 'Mahlkönig E64 WS', 'dev-mode "Unknown" never becomes the model');
+  assert.deepEqual(unknown.writes.map((call) => call.path), ['/api/v1/grinders']);
+  assert.equal(unknown.inventory.workflowLink, 'disabled');
+  const off = await inventoryRun({extra: {PopulateGrinderRecord: 'false'}});
+  assert.deepEqual(off.decaid.calls, []);
+  assert.equal(off.inventory.status, 'disabled');
+});
+
+test('an expired grinder session costs exactly one extra login', async () => {
+  const zip = zipOf([{name: 'HemroE64WSServiceLogs_SN1_x.csv', data: `${serviceHeader}\n1,1,LogIn,2026-11-23 10:00:00,Role Owner logged in`, method: 8}]);
+  const h = await logHarness({zip, refuse: (init) => init.headers.Authorization === 'Bearer t1'});
+  await h.connect();
+  await h.grind();
+  assert.deepEqual([h.logins(), h.downloads()], [2, 2], 'refused once, logged in once, retried once');
+  assert.equal(h.events().log.status, 'ok');
+  await h.loaded.plugin.onUnload();
+});
+
+test('two records owned by the same instance resolve to the oldest without deleting either', async () => {
+  const own = (id, createdAt) => ({id, model: 'Mahlkönig E64 WS', archived: false, createdAt,
+    extras: {source: 'mahlkoenig-e64.reaplugin', instanceId: 'one', deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', lastSeenAt: new Date().toISOString()}});
+  const run = await inventoryRun({decaid: decaidApi({grinders: [own('newer', '2026-11-23T10:00:00Z'), own('older', '2026-11-20T10:00:00Z')]})});
+  assert.deepEqual([run.inventory.grinderId, run.inventory.duplicates, run.decaid.grinders.length], ['older', 1, 2]);
+  assert.deepEqual(run.writes.map((call) => call.path), ['/api/v1/workflow']);
 });

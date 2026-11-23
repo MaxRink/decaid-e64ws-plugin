@@ -11,6 +11,11 @@ import 'package:reaprime/src/plugins/plugin_grinder.dart';
 import 'package:reaprime/src/plugins/plugin_manager.dart';
 import 'package:reaprime/src/plugins/plugin_manifest.dart';
 import 'package:reaprime/src/services/storage/kv_store_service.dart';
+import 'package:reaprime/src/models/data/grinder.dart';
+import 'package:reaprime/src/services/storage/grinder_storage_service.dart';
+import 'package:reaprime/src/services/webserver/grinders_handler.dart';
+import 'package:shelf/shelf_io.dart' as shelf_io;
+import 'package:shelf_plus/shelf_plus.dart';
 
 class _Store implements KeyValueStoreService {
   final values = <String, Object>{};
@@ -40,6 +45,29 @@ class _Store implements KeyValueStoreService {
   @override
   Future<Map<String, Object>> getAll({String namespace = 'default'}) async =>
       Map.of(values);
+}
+
+class _MemoryGrinders implements GrinderStorageService {
+  final _grinders = <Grinder>[];
+  @override
+  Future<List<Grinder>> getAllGrinders({bool includeArchived = false}) async =>
+      _grinders.where((g) => includeArchived || !g.archived).toList();
+  @override
+  Stream<List<Grinder>> watchAllGrinders({bool includeArchived = false}) =>
+      throw UnimplementedError();
+  @override
+  Future<Grinder?> getGrinderById(String id) async =>
+      _grinders.where((g) => g.id == id).firstOrNull;
+  @override
+  Future<void> insertGrinder(Grinder grinder) async => _grinders.add(grinder);
+  @override
+  Future<void> updateGrinder(Grinder grinder) async {
+    _grinders.removeWhere((g) => g.id == grinder.id);
+    _grinders.add(grinder);
+  }
+  @override
+  Future<void> deleteGrinder(String id) async =>
+      _grinders.removeWhere((g) => g.id == id);
 }
 
 Future<int> _freePort() async {
@@ -177,6 +205,43 @@ void main() {
         deviceInvocationTimeout: const Duration(seconds: 10),
       );
       E64Sim? sim;
+      // Decaid's own API on 127.0.0.1:8080: the real GrindersHandler over an
+      // in-memory store, a workflow route that deep-merges context like
+      // PUT /api/v1/workflow, and one shot record.
+      final grinders = _MemoryGrinders();
+      var workflow = <String, dynamic>{
+        'context': {'targetYield': 36, 'grinderSetting': '82'},
+        'profile': {'title': 'Adaptive'},
+      };
+      final shotStart = DateTime.now().toUtc().add(const Duration(minutes: 2));
+      final app = Router().plus;
+      GrindersHandler(storage: grinders).addRoutes(app);
+      app.get('/api/v1/workflow', (Request _) => Response.ok(jsonEncode(workflow),
+          headers: {'content-type': 'application/json'}));
+      app.put('/api/v1/workflow', (Request request) async {
+        final patch = jsonDecode(await request.readAsString()) as Map<String, dynamic>;
+        workflow = {
+          ...workflow,
+          for (final entry in patch.entries)
+            entry.key: entry.value is Map
+                ? {...?(workflow[entry.key] as Map<String, dynamic>?), ...entry.value as Map<String, dynamic>}
+                : entry.value,
+        };
+        return Response.ok(jsonEncode(workflow), headers: {'content-type': 'application/json'});
+      });
+      app.get('/api/v1/shots/shot-1', (Request _) => Response.ok(jsonEncode({
+        'id': 'shot-1',
+        'timestamp': shotStart.toIso8601String(),
+        'measurements': [
+          {'machine': {'timestamp': shotStart.toIso8601String()}, 'scale': {'weight': 0}},
+          {
+            'machine': {'timestamp': shotStart.add(const Duration(seconds: 28)).toIso8601String()},
+            'scale': {'weight': 36.4},
+          },
+        ],
+      }), headers: {'content-type': 'application/json'}));
+      final decaidApi = await shelf_io.serve(app.call, InternetAddress.loopbackIPv4, 8080);
+      addTearDown(() => decaidApi.close(force: true));
       addTearDown(() async {
         await manager.dispose();
         await service.dispose();
@@ -206,6 +271,23 @@ void main() {
         manager.dispatchEvent(manifest.id, 'httpRequest', {'requestId': id, ...value});
         return await response.timeout(const Duration(seconds: 5));
       }
+
+      // Let the connect-time inventory sync finish before a reload, as a user would.
+      Future<void> settleInventory(String deviceId) async {
+        final deadline = DateTime.now().add(const Duration(seconds: 10));
+        while (true) {
+          final read = await request({
+            'endpoint': 'e64-diagnostics',
+            'method': 'GET',
+            'query': {'deviceId': deviceId, 'read': 'inventory'},
+          });
+          final inventory = jsonDecode(read['body'] as String) as Map<String, dynamic>;
+          if (inventory['workflowLink'] != null) return;
+          expect(DateTime.now().isBefore(deadline), isTrue, reason: 'inventory sync: $inventory');
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+      }
+
 
       sim = await E64Sim.start(simRoot!, devGate: 'locked');
       final unpinned = await load(sim.settings(pinned: false));
@@ -252,6 +334,7 @@ void main() {
         expect(response['body'], isNot(contains('sim-password')));
         expect(response['body'], isNot(contains('host-sim-token')));
       }
+      await settleInventory(device.deviceId);
       await manager.unloadPlugin(manifest.id);
 
       final locked = await load(sim.settings(control: true, owner: 'decaid'));
@@ -280,34 +363,11 @@ void main() {
       await controlled.currentSnapshot
           .firstWhere((snapshot) => snapshot.state == GrinderState.idle)
           .timeout(const Duration(seconds: 5));
+      await settleInventory(controlled.deviceId);
       await manager.unloadPlugin(manifest.id);
 
       // Grind log through the host's binary fetch, then a brew event with the
-      // real grind UUID. Decaid's own shot API is served on 127.0.0.1:8080.
-      final shots = await HttpServer.bind(InternetAddress.loopbackIPv4, 8080);
-      addTearDown(() => shots.close(force: true));
-      final shotStart = DateTime.now().toUtc();
-      shots.listen((request) {
-        final found = request.uri.path == '/api/v1/shots/shot-1';
-        request.response.statusCode = found ? 200 : 404;
-        request.response.headers.contentType = ContentType.json;
-        request.response.write(jsonEncode(found
-            ? {
-                'id': 'shot-1',
-                'timestamp': shotStart.toIso8601String(),
-                'measurements': [
-                  {'machine': {'timestamp': shotStart.toIso8601String()}, 'scale': {'weight': 0}},
-                  {
-                    'machine': {
-                      'timestamp': shotStart.add(const Duration(seconds: 28)).toIso8601String(),
-                    },
-                    'scale': {'weight': 36.4},
-                  },
-                ],
-              }
-            : {'error': 'not found'}));
-        request.response.close();
-      });
+      // real grind UUID.
       final owner = await load(sim.settings(control: true, owner: 'grinder'));
       await owner.onConnect();
       await owner.start();
@@ -346,8 +406,21 @@ void main() {
         brew = (await sim.control('/sim/state'))['lastBrewEvent'] as Map<String, dynamic>?;
       }
       expect(brew['grindUuid'], grind!['grindUuid']);
+      final records = await grinders.getAllGrinders(includeArchived: true);
+      expect(records, hasLength(1), reason: 'one inventory record across every reload');
+      expect(records.single.model, 'Mahlkönig E64 WS');
+      expect(records.single.extras?['source'], 'mahlkoenig-e64.reaplugin');
+      expect(records.single.extras?['deviceId'], owner.deviceId);
+      expect(workflow['context'], {
+        'targetYield': 36,
+        'grinderSetting': '82',
+        'grinderId': records.single.id,
+        'grinderModel': 'Mahlkönig E64 WS',
+      });
+      expect(workflow['profile'], {'title': 'Adaptive'});
       expect(brew['brewTimeMs'], 28000);
       expect(brew['brewWeightMg'], 36400);
+      await settleInventory(owner.deviceId);
       await manager.unloadPlugin(manifest.id);
     },
     skip: missing && optional

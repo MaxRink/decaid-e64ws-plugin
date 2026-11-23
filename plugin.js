@@ -17,6 +17,10 @@ function createPlugin(host) {
   const MAX_STEP_UM = 10, BREW_MIN_MS = 10000, LINK_BEFORE_MS = 5 * 60000, LINK_AFTER_MS = 60000, MAX_GRIND_EVENTS = 20, PROBE_MS = 3000;
   const DECAID_API = "http://127.0.0.1:8080";
   const MAX_LOG_BYTES = 8 * 1024 * 1024, LOG_MATCH_MS = 10 * 60000;
+  // Each machine-log download writes a ZIP to the grinder's /tmp and checkpoints
+  // its SQLite WAL, so downloads are rare and bounded.
+  const LOG_MIN_INTERVAL_MS = 10 * 60000, LOG_IDLE_REFRESH_MS = 6 * 3600000, LOG_CONNECT_DELAY_MS = 60000,
+    LOG_MAX_FAILURES = 3, MAX_SERVICE_ROWS = 500;
   // Diagnostics keep only these vendor fields. Serial numbers, session ids,
   // Wi-Fi credentials, cloud URLs and log messages never leave the plugin.
   const exposed = {
@@ -253,6 +257,9 @@ function createPlugin(host) {
     const mintTokens = jsonSetting(settings, "MintTokens", false);
     const allowNoPassword = jsonSetting(settings, "AllowNoPasswordWorkaround", false);
     const allowControl = jsonSetting(settings, "AllowControl", false);
+    const populateGrinder = jsonSetting(settings, "PopulateGrinderRecord", true);
+    const linkWorkflow = jsonSetting(settings, "LinkWorkflowGrinder", true);
+    if (typeof populateGrinder !== "boolean" || typeof linkWorkflow !== "boolean") fail("PopulateGrinderRecord and LinkWorkflowGrinder must be true or false");
     const syncBacklight = jsonSetting(settings, "SyncBacklight", false);
     const owner = settings && settings.AdjustmentOwner !== undefined ? settings.AdjustmentOwner : "off";
     if (typeof allowControl !== "boolean" || typeof syncBacklight !== "boolean") fail("AllowControl and SyncBacklight must be true or false");
@@ -283,7 +290,7 @@ function createPlugin(host) {
       if (mintTokens && !token && !password && !allowNoPassword) fail("MintTokens needs a password or AllowNoPasswordWorkaround for " + id);
       ids.add(id);
       return {id, name, scheme, host: row.host, port: row.port, pollMs, token, certSha256, restPort,
-        password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner};
+        password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner, populateGrinder, linkWorkflow};
     });
     if (Object.keys(tokens).some((id) => !ids.has(id))) fail("TokensJson contains an unknown id");
     if (Object.keys(passwords).some((id) => !ids.has(id))) fail("PasswordsJson contains an unknown id");
@@ -481,9 +488,14 @@ function createPlugin(host) {
       control: {allowControl: config.allowControl, debugMode: config.allowControl ? "unprobed" : "disabled", probedAt: null,
         owner: config.owner, syncBacklight: config.syncBacklight, lastAction: null, lastBrewEvent: null},
       grindEvents: [], lastGrindState: null,
-      grindLog: {status: config.mintTokens ? "idle" : "needs-mint-tokens", lastAt: null, lastError: null, failures: 0, nextAt: null}};
+      grindLog: {status: config.mintTokens ? "idle" : "needs-mint-tokens", lastAt: null, lastAttemptAt: null, lastError: null, failures: 0, nextAt: null, dueAt: null},
+      serviceRows: [], logTimer: null, restToken: null, restCookie: null,
+      inventory: {status: config.populateGrinder ? "pending" : "disabled", grinderId: null, model: null, archived: false, workflowLink: null, duplicates: 0, lastSyncAt: null, lastError: null}};
   }
-  function clear(instance) { if (instance.poll !== null) clearTimeout(instance.poll); instance.poll = null; clearTimeout(instance.observationExpiry); instance.observationExpiry = null; }
+  function clear(instance) {
+    if (instance.poll !== null) clearTimeout(instance.poll); instance.poll = null; clearTimeout(instance.observationExpiry); instance.observationExpiry = null;
+    if (instance.logTimer !== null) clearTimeout(instance.logTimer); instance.logTimer = null; instance.grindLog.dueAt = null;
+  }
   function rejectAll(instance, reason) { for (const item of instance.pending.values()) { clearTimeout(item.timer); item.reject(new Error(reason)); } instance.pending.clear(); }
   function schedule(instance, epoch) {
     if (!instance.connected || instance.config.pollMs === 0 || instance.epoch !== epoch) return;
@@ -572,6 +584,7 @@ function createPlugin(host) {
         if (auth && auth.startsWith("Bearer ") && auth.slice(7).trim()) {
           const cookie = /PHPSESSID=([^;,\s]+)/.exec(response.headers.get("set-cookie") || "");
           instance.restCookie = cookie ? cookie[1] : null;
+          instance.restToken = auth.slice(7).trim();
           instance.tokenSource = config.password ? "password" : "workaround";
           instance.lastMintAt = new Date().toISOString();
           instance.lastMintError = null; instance.mintFailures = 0; instance.nextMintAt = null;
@@ -609,36 +622,85 @@ function createPlugin(host) {
       targetWeightGr: finite(data.grindTargetWeightGr), resultWeightGr: finite(data.grindResultWeightGr),
       motorRunTimeMs: finite(data.motorRunTimeMs), setting: setting === undefined ? null : setting, linkedShotId: null});
     instance.grindEvents.length = Math.min(instance.grindEvents.length, MAX_GRIND_EVENTS);
-    enrichGrind(instance, instance.grindEvents[0]);
+    queueLogDownload(instance, 0);
   }
-  // After each completed grind, read the newest rows of the grinder's own grind
-  // log (download_machine_logs ZIP) and attach the matching row: grind UUID and
-  // recipe. Needs a host whose fetch supports responseType "base64".
-  async function enrichGrind(instance, grind) {
-    const log = instance.grindLog, config = instance.config;
-    if (log.status === "unsupported-host" || log.status === "needs-mint-tokens") return;
-    if (log.nextAt !== null && Date.now() < log.nextAt) return;
-    log.status = "downloading";
+  // Machine logs (download_machine_logs ZIP): after completed grinds, coalesced to
+  // at most one download per 10 minutes, plus one idle refresh per 6 hours for
+  // the service log. Three failures in a row suspend downloads until the next
+  // connect. Only the parsed, bounded rows are kept; the ZIP and CSV are dropped.
+  function queueLogDownload(instance, delayMs) {
+    const log = instance.grindLog;
+    if (!instance.connected || !instance.config.mintTokens || log.status === "unsupported-host" || log.status === "suspended") return;
+    const due = Math.max(Date.now() + delayMs, log.nextAt === null ? 0 : log.nextAt);
+    if (instance.logTimer !== null && log.dueAt !== null && log.dueAt <= due) return;
+    if (instance.logTimer !== null) clearTimeout(instance.logTimer);
+    log.dueAt = due;
+    const epoch = instance.epoch;
+    instance.logTimer = setTimeout(() => {
+      instance.logTimer = null; log.dueAt = null;
+      if (instance.epoch === epoch) downloadLogs(instance);
+    }, Math.max(0, due - Date.now()));
+  }
+  async function downloadLogs(instance) {
+    const log = instance.grindLog, config = instance.config, epoch = instance.epoch;
+    if (!instance.connected || log.status === "unsupported-host" || log.status === "suspended") return;
+    log.status = "downloading"; log.lastAttemptAt = new Date().toISOString(); log.nextAt = Date.now() + LOG_MIN_INTERVAL_MS;
     try {
-      const token = await mintToken(instance);
-      const response = await fetch(restUrl(config, "download_machine_logs"), {
+      // Reuse the connection's Owner session; log in again only when it was refused.
+      const fetchZip = () => fetch(restUrl(config, "download_machine_logs"), {
         method: "POST", body: "{}", responseType: "base64",
-        headers: {"Content-Type": "application/json", Authorization: "Bearer " + token, ...(instance.restCookie ? {Cookie: "PHPSESSID=" + instance.restCookie} : {})},
+        headers: {"Content-Type": "application/json", Authorization: "Bearer " + instance.restToken, ...(instance.restCookie ? {Cookie: "PHPSESSID=" + instance.restCookie} : {})},
         ...(config.certSha256 ? {tlsPinSha256: config.certSha256} : {})
       });
+      let response = instance.restToken ? await fetchZip() : null;
+      if (!response || (!response.ok && response.status >= 400 && response.status < 500)) {
+        await mintToken(instance);
+        response = await fetchZip();
+      }
       if (!response || typeof response.base64 !== "function") { log.status = "unsupported-host"; return; }
       if (!response.ok) throw new Error("grind log HTTP " + response.status);
-      const csv = readZip(fromBase64(await response.base64()), (name) => /GrindLogs[^/]*\.csv$/i.test(name), MAX_LOG_BYTES);
-      if (!csv) throw new Error("grind log CSV missing");
-      const row = matchGrindRow(instance, grind, grindRows(utf8(csv)));
-      if (!row) throw new Error("no matching grind log row");
-      applyGrindRow(grind, row);
-      Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0, nextAt: null});
+      const bytes = fromBase64(await response.base64());
+      const grindCsv = readZip(bytes, (name) => /GrindLogs[^/]*\.csv$/i.test(name), MAX_LOG_BYTES);
+      const serviceCsv = readZip(bytes, (name) => /ServiceLogs[^/]*\.csv$/i.test(name), MAX_LOG_BYTES);
+      if (!grindCsv && !serviceCsv) throw new Error("grind log CSV missing");
+      if (grindCsv) {
+        const rows = grindRows(utf8(grindCsv));
+        for (const grind of instance.grindEvents) if (!grind.grindUuid) { const row = matchGrindRow(instance, grind, rows); if (row) applyGrindRow(grind, row); }
+      }
+      if (serviceCsv) mergeServiceRows(instance, utf8(serviceCsv));
+      Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0});
     } catch (error) {
       log.failures++;
-      Object.assign(log, {status: "failed", lastError: error && /^(grind log|no matching|zip|inflate|login)/.test(error.message) ? error.message : "grind log download failed",
-        nextAt: Date.now() + Math.min(MINT_BACKOFF_MS * Math.pow(2, log.failures - 1), MINT_BACKOFF_MAX_MS)});
+      Object.assign(log, {status: log.failures >= LOG_MAX_FAILURES ? "suspended" : "failed",
+        lastError: error && /^(grind log|no matching|zip|inflate|login)/.test(error.message) ? error.message : "grind log download failed"});
+    } finally {
+      if (instance.epoch === epoch) queueLogDownload(instance, LOG_IDLE_REFRESH_MS);
     }
+  }
+  // Service-log rows are vendor free text: identifiers and network details are redacted.
+  function redact(text) {
+    return String(text).slice(0, 500)
+      .replace(/\b(password|passwd|pwd|psk|pass|key|token|secret|bearer|session(?:id)?|ssid)\b(\s*[:=]?\s*)("[^"]*"|\S+)/gi, "$1$2<redacted>")
+      .replace(/\bSN[\s:#=_-]*[A-Za-z0-9-]{4,}/g, "SN<redacted>")
+      .replace(/\b(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b/gi, "<mac>")
+      .replace(/\b\d{1,3}(?:\.\d{1,3}){3}\b/g, "<ip>")
+      .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, "<id>")
+      .replace(/\b[0-9a-f]{16,}\b/gi, "<id>")
+      .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, "<email>");
+  }
+  function mergeServiceRows(instance, text) {
+    const table = parseCsv(text);
+    if (!table.length) return;
+    const header = table[0].map((name) => name.trim());
+    const index = (name) => header.indexOf(name);
+    const byId = new Map(instance.serviceRows.map((row) => [row.id, row]));
+    for (const cells of table.slice(1)) {
+      const id = Number(cells[index("event_id")]);
+      if (!Number.isSafeInteger(id) || id < 0) continue;
+      byId.set(id, {id, eventTypeId: Number(cells[index("event_type_id")]) || null, eventType: redact(cells[index("event_type")] || "").slice(0, 64),
+        eventDateTime: (cells[index("event_date_time")] || "").slice(0, 32), details: redact(cells[index("event_details")] || "")});
+    }
+    instance.serviceRows = Array.from(byId.values()).sort((a, b) => a.id - b.id).slice(-MAX_SERVICE_ROWS);
   }
   function restUrl(config, route) {
     return "https://" + hostName(config) + (config.restPort === 443 ? "" : ":" + config.restPort) + "/rest_api/" + route;
@@ -785,11 +847,80 @@ function createPlugin(host) {
       result("failed", error && error.message ? error.message : "brew event failed");
     }
   }
+  // --- Decaid grinder inventory -------------------------------------------
+  // One Decaid grinder record per instance, so shots carry this grinder. The
+  // user owns the record after creation: only plugin-owned extras change.
+  const PLUGIN_ID = "mahlkoenig-e64.reaplugin", DAY_MS = 86400000;
+  async function api(method, path, body) {
+    const response = await fetch(DECAID_API + path, {method, ...(body === undefined ? {} : {headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})});
+    if (!response || !response.ok) throw new Error(path.split("?")[0] + " HTTP " + (response && response.status));
+    return JSON.parse(await response.text());
+  }
+  async function syncInventory(instance, epoch) {
+    const inventory = instance.inventory, config = instance.config;
+    if (!config.populateGrinder || inventory.syncing) return;
+    inventory.syncing = true;
+    try {
+      const list = await api("GET", "/api/v1/grinders?includeArchived=true");
+      if (!Array.isArray(list)) throw new Error("/api/v1/grinders returned no list");
+      if (epoch !== instance.epoch) return;
+      const owned = (g) => g && g.extras && typeof g.extras === "object" && g.extras.source === PLUGIN_ID && g.extras.instanceId === config.id;
+      // A reload racing an earlier generation's creation can leave two records; the oldest wins and nothing is deleted.
+      const mineAll = list.filter(owned).sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+      const mine = mineAll[0];
+      inventory.duplicates = Math.max(0, mineAll.length - 1);
+      const extras = (record) => ({...(record && record.extras && typeof record.extras === "object" ? record.extras : {}),
+        source: PLUGIN_ID, instanceId: config.id, unit: "µm (grinder display)", deviceId: instance.deviceId, lastSeenAt: new Date().toISOString()});
+      let record;
+      if (mine) {
+        if (mine.archived === true) {
+          Object.assign(inventory, {status: "archived", grinderId: mine.id, model: mine.model, archived: true, workflowLink: null, lastError: null, lastSyncAt: new Date().toISOString()});
+          return;
+        }
+        const seen = Date.parse(mine.extras.lastSeenAt);
+        record = !Number.isFinite(seen) || Date.now() - seen >= DAY_MS || mine.extras.deviceId !== instance.deviceId
+          ? await api("PUT", "/api/v1/grinders/" + encodeURIComponent(mine.id), {extras: extras(mine)}) : mine;
+        inventory.status = "linked";
+      } else {
+        const adoptable = list.find((g) => g && g.archived !== true && typeof g.model === "string" && /E64/i.test(g.model) &&
+          !(g.extras && typeof g.extras === "object" && g.extras.source));
+        if (adoptable) {
+          record = await api("PUT", "/api/v1/grinders/" + encodeURIComponent(adoptable.id), {extras: extras(adoptable)});
+          inventory.status = "adopted";
+        } else {
+          let grinderType = null;
+          try { grinderType = (await request(instance, "machineInfo", false)).grinderType; } catch (_) {}
+          if (epoch !== instance.epoch) return;
+          const known = typeof grinderType === "string" && /^E64\b/i.test(grinderType) ? "Mahlkönig " + grinderType : null;
+          record = await api("POST", "/api/v1/grinders", {model: known || inventory.model || "Mahlkönig E64 WS", burrs: "64 mm flat (stock)",
+            burrSize: 64, burrType: "flat", settingType: "numeric", settingSmallStep: 1, settingBigStep: 10, extras: extras(null)});
+          inventory.status = "created";
+        }
+      }
+      Object.assign(inventory, {grinderId: record.id, model: record.model, archived: false, lastError: null, lastSyncAt: new Date().toISOString()});
+      inventory.workflowLink = config.linkWorkflow ? await linkWorkflow(record) : "disabled";
+    } catch (error) {
+      Object.assign(inventory, {status: "error", lastError: error && /HTTP|returned/.test(error.message) ? error.message : "inventory request failed"});
+    } finally {
+      inventory.syncing = false;
+    }
+  }
+  // Fill the workflow's grinder only when it names none; other fields are untouched
+  // (PUT /api/v1/workflow deep-merges a partial body).
+  async function linkWorkflow(record) {
+    const workflow = await api("GET", "/api/v1/workflow");
+    const context = workflow && workflow.context && typeof workflow.context === "object" ? workflow.context : {};
+    if (context.grinderId === record.id) return "linked";
+    if (context.grinderId || context.grinderModel) return "kept-existing";
+    await api("PUT", "/api/v1/workflow", {context: {grinderId: record.id, grinderModel: record.model}});
+    return "linked";
+  }
   function disconnect(instance, expectedEpoch, reason) {
     if (expectedEpoch !== undefined && expectedEpoch !== instance.epoch) return Promise.resolve();
     const transport = instance.transport, handle = instance.handle;
     instance.epoch++; instance.connected = false; instance.transport = null; instance.handle = null; instance.context = null; clear(instance); rejectAll(instance, reason || "E64 disconnected");
     if (instance.config && instance.config.mintTokens && !instance.config.staticToken) { instance.config.token = ""; instance.tokenSource = "none"; }
+    instance.restToken = null; instance.restCookie = null;
     return transport && handle ? transport.close(handle).catch(() => {}) : Promise.resolve();
   }
   async function connect(instance, context) {
@@ -808,6 +939,11 @@ function createPlugin(host) {
       instance.handle = opened.handle; instance.connected = true;
       transport.onEvent(opened.handle, (eventValue) => event(instance, epoch, opened.handle, eventValue));
       await request(instance, "state", true); schedule(instance, epoch);
+      syncInventory(instance, epoch);
+      // A new connection lifts a suspension and allows one idle refresh if none ran in 6 hours.
+      if (instance.grindLog.status === "suspended") Object.assign(instance.grindLog, {status: "idle", failures: 0});
+      const lastLog = Date.parse(instance.grindLog.lastAttemptAt);
+      queueLogDownload(instance, Number.isFinite(lastLog) ? Math.max(LOG_CONNECT_DELAY_MS, lastLog + LOG_IDLE_REFRESH_MS - Date.now()) : LOG_CONNECT_DELAY_MS);
     } catch (error) {
       await disconnect(instance, epoch, "E64 connection failed");
       // Host WebSocket errors can echo the connect URL, which carries the token.
@@ -882,18 +1018,31 @@ function createPlugin(host) {
         sync.lastScriptAt = new Date().toISOString();
         return jsonResponse(200, {ok: true, ID: body.ID, started: false});
       }
+      if (request.endpoint === "service-log") {
+        if (request.method !== "GET") return jsonResponse(405, {error: "method not allowed"});
+        const query = request.query || {};
+        const target = query.instance !== undefined ? instances.get(query.instance)
+          : query.deviceId !== undefined ? Array.from(instances.values()).find((candidate) => candidate.deviceId === query.deviceId)
+          : instances.size === 1 ? Array.from(instances.values())[0] : null;
+        if (!target) return jsonResponse(query.instance === undefined && query.deviceId === undefined ? 400 : 404, {error: "instance or deviceId required"});
+        const after = query.after === undefined ? -1 : Number(query.after);
+        if (!Number.isSafeInteger(after)) return jsonResponse(400, {error: "after must be an event_id"});
+        const {dueAt, ...log} = target.grindLog;
+        return jsonResponse(200, {instance: target.config.id, rows: target.serviceRows.filter((row) => row.id > after), log});
+      }
       if (request.endpoint !== "e64-diagnostics" && request.endpoint !== "grind-events") return jsonResponse(404, {error: "unknown endpoint"});
       if (request.method !== "GET") return jsonResponse(405, {error: "method not allowed"});
       const id = request.query && request.query.deviceId;
       const instance = Array.from(instances.values()).find((candidate) => candidate.deviceId === id);
       if (!instance) return {status: 404, headers: {"Content-Type": "application/json"}, body: JSON.stringify({error: "unknown instance"})};
       const grindEvents = () => instance.grindEvents.map(({completedAtMs, ...event}) => event);
-      if (request.endpoint === "grind-events") return jsonResponse(200, {events: grindEvents(), log: instance.grindLog});
+      if (request.endpoint === "grind-events") return jsonResponse(200, {events: grindEvents(), log: instance.grindLog, grinderId: instance.inventory.grinderId});
       const read = request.query.read;
-      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "connection" && read !== "xenia" && read !== "control") return jsonResponse(400, {error: "unsupported read"});
+      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "connection" && read !== "xenia" && read !== "control" && read !== "inventory") return jsonResponse(400, {error: "unsupported read"});
       const operation = read === undefined ? null : read;
       if (operation === "xenia") return Promise.resolve(jsonResponse(200, xeniaRead(instance)));
       if (operation === "control") return Promise.resolve(jsonResponse(200, instance.control));
+      if (operation === "inventory") { const {syncing, ...inventory} = instance.inventory; return Promise.resolve(jsonResponse(200, inventory)); }
       if (operation === "connection") {
         const connection = {connected: instance.connected, tokenSource: instance.tokenSource,
           lastMintAt: instance.lastMintAt, lastMintError: instance.lastMintError,

@@ -114,16 +114,49 @@ async function request(target, method, route, body, headers = {}) {
   return {status: Number(status.split(' ')[1]), headers: parsed, bytes, body: bytes.toString('utf8')};
 }
 
-// Decaid's own REST API (shots) is answered from `shots`; everything else goes to the network.
+// Emulates the Decaid REST routes the plugin uses, with the host's semantics:
+// grinder PUT merges top-level fields (extras is replaced), workflow PUT deep-merges.
+export function decaidApi({shots = {}, grinders = [], workflow = {context: {}}} = {}) {
+  const state = {shots, grinders, workflow, calls: []};
+  state.handle = (method, path, body) => {
+    state.calls.push({method, path, body});
+    const [route, query = ''] = path.split('?');
+    const json = (status, value) => ({status, value});
+    let match;
+    if ((match = route.match(/^\/api\/v1\/shots\/([^/]+)$/)) && method === 'GET') {
+      const record = shots[decodeURIComponent(match[1])];
+      return record ? json(200, record) : json(404, {error: 'not found'});
+    }
+    if (route === '/api/v1/grinders' && method === 'GET') return json(200, grinders.filter((g) => query.includes('includeArchived=true') || !g.archived));
+    if (route === '/api/v1/grinders' && method === 'POST') {
+      const record = {id: crypto.randomUUID(), archived: false, notes: null, settingValues: null, rpmSmallStep: null, rpmBigStep: null, ...body};
+      grinders.push(record);
+      return json(201, record);
+    }
+    if ((match = route.match(/^\/api\/v1\/grinders\/([^/]+)$/)) && method === 'PUT') {
+      const record = grinders.find((g) => g.id === decodeURIComponent(match[1]));
+      if (!record) return json(404, {error: 'Grinder not found'});
+      Object.assign(record, body, {id: record.id});
+      return json(200, record);
+    }
+    if (route === '/api/v1/workflow' && method === 'GET') return json(200, workflow);
+    if (route === '/api/v1/workflow' && method === 'PUT') {
+      for (const [key, value] of Object.entries(body)) workflow[key] = value && typeof value === 'object' && !Array.isArray(value) ? {...workflow[key], ...value} : value;
+      return json(200, workflow);
+    }
+    return json(404, {error: 'no route'});
+  };
+  return state;
+}
+
 // binary: emulate the host's opt-in fetch(url, {responseType: "base64"}) -> response.base64().
-export function hostFetch(log = [], shots = {}, binary = true) {
+export function hostFetch(log = [], decaid = decaidApi(), binary = true) {
   return async (url, init = {}) => {
     const parsed = new URL(url);
     log.push({url, init});
-    const shot = url.match(/^http:\/\/127\.0\.0\.1:8080\/api\/v1\/shots\/([^/?]+)$/);
-    if (shot) {
-      const record = shots[decodeURIComponent(shot[1])];
-      return {status: record ? 200 : 404, ok: Boolean(record), headers: {get: () => null}, text: async () => JSON.stringify(record ?? {error: 'not found'})};
+    if (parsed.origin === 'http://127.0.0.1:8080') {
+      const {status, value} = decaid.handle(init.method || 'GET', parsed.pathname + parsed.search, init.body ? JSON.parse(init.body) : undefined);
+      return {status, ok: status >= 200 && status < 300, headers: {get: () => null}, text: async () => JSON.stringify(value)};
     }
     const response = await request({host: parsed.hostname.replace(/^\[|\]$/g, ''), port: Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80)),
       secure: parsed.protocol === 'https:', pin: init.tlsPinSha256}, init.method || 'GET', parsed.pathname + parsed.search, init.body, init.headers || {});
@@ -189,7 +222,7 @@ export function hostTransport(log = []) {
   };
 }
 
-export async function loadPlugin(settings, {fetchLog = [], openLog = [], notices = [], shots = {}, binaryFetch = true} = {}) {
+export async function loadPlugin(settings, {fetchLog = [], openLog = [], notices = [], shots = {}, decaid = decaidApi({shots}), binaryFetch = true} = {}) {
   const registrations = [];
   const host = {
     notify: (value) => { notices.push(['notify', value]); return 'request'; },
@@ -197,7 +230,7 @@ export async function loadPlugin(settings, {fetchLog = [], openLog = [], notices
     transport: hostTransport(openLog),
     devices: {register(definition, handlers) { registrations.push({definition, handlers}); return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:${definition.driverId}:${definition.instanceId}`}); }},
   };
-  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, Date, Math, encodeURIComponent, btoa: globalThis.btoa, fetch: hostFetch(fetchLog, shots, binaryFetch)};
+  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, Date, Math, encodeURIComponent, btoa: globalThis.btoa, fetch: hostFetch(fetchLog, decaid, binaryFetch)};
   vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
   const plugin = sandbox.createPlugin(host);
   await plugin.onLoad(settings);
@@ -214,7 +247,7 @@ export async function loadPlugin(settings, {fetchLog = [], openLog = [], notices
     };
     return session;
   });
-  return {plugin, sessions, session: sessions[0]};
+  return {plugin, sessions, session: sessions[0], decaid};
 }
 
 export async function until(predicate, message, timeout = 5000) {
