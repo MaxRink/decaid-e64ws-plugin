@@ -1237,7 +1237,7 @@ async function load() {
     $("allowControl").checked = settings.AllowControl === "true";
     $("syncBacklight").checked = settings.SyncBacklight === "true";
     $("backlightRow").hidden = !$("allowControl").checked;
-  } catch (_) {}
+  } catch (e) { say($("hostOut"), "error", "Could not read the saved settings: " + e.message); }
   passwordHint();
 }
 const hostChanged = () => state.previousHost !== null && state.previousHost.toLowerCase() !== $("host").value.trim().toLowerCase();
@@ -1311,7 +1311,7 @@ $("save").addEventListener("click", async () => {
   const check = await post({action: "check", settings: {...settings, PasswordsJson: typeof settings.PasswordsJson === "string" ? settings.PasswordsJson : JSON.stringify({[state.instanceId]: {host: target().host, password: "kept"}})}});
   if (check.errors && check.errors.length) return say($("saveOut"), "error", check.errors[0]);
   try { await pu.api(base + "/settings", {method: "POST", body: settings}); }
-  catch (e) { return say($("saveOut"), "error", e.status === 401 ? "Finish this in Decaid: extension protection is on." : "Saving failed."); }
+  catch (e) { return say($("saveOut"), "error", e.status === 401 ? "Finish this in Decaid: extension protection is on." : "Saving failed: " + e.message); }
   $("password").value = "";
   say($("saveOut"), "warn", "Saved. Connecting…");
   const started = Date.now();
@@ -1428,7 +1428,7 @@ load();
         const target = query.instance !== undefined ? instances.get(query.instance)
           : query.deviceId !== undefined ? Array.from(instances.values()).find((candidate) => candidate.deviceId === query.deviceId)
           : instances.size === 1 ? Array.from(instances.values())[0] : null;
-        if (!target) return jsonResponse(query.instance === undefined && query.deviceId === undefined ? 400 : 404, {error: "instance or deviceId required"});
+        if (!target) return query.instance === undefined && query.deviceId === undefined ? jsonResponse(400, {error: "instance or deviceId required"}) : jsonResponse(404, {error: "unknown instance"});
         const after = query.after === undefined ? -1 : Number(query.after);
         if (!Number.isSafeInteger(after)) return jsonResponse(400, {error: "after must be an event_id"});
         const {dueAt, ...log} = target.grindLog;

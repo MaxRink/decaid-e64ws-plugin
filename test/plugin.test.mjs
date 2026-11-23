@@ -898,6 +898,7 @@ test('grind logs are matched by dose and time, coalesced, and fetched with the c
   assert.deepEqual(JSON.parse(h.service({instance: 'one', after: '2'}).body).rows.map((row) => row.id), [3]);
   assert.equal(h.service({after: 'x'}).status, 400);
   assert.equal(h.service({instance: 'nope'}).status, 404);
+  assert.deepEqual(JSON.parse(h.service({deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:nope'}).body), {error: 'unknown instance'});
   await h.grind(); await h.advance(60000); await h.grind();
   assert.equal(h.downloads(), 1, 'grinds within 10 minutes are coalesced');
   assert.equal(h.logTimers().length, 1);

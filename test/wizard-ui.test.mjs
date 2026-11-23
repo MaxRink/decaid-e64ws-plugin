@@ -37,6 +37,7 @@ function decaid() {
         return send(200, visible);
       }
       const update = JSON.parse(body);
+      if (store.reject) return send(400, {error: store.reject});
       store.saves.push(update);
       for (const [key, value] of Object.entries(update)) if (!(value && typeof value === 'object' && value.isSet === true)) store.settings[key] = value;
       await reload();
@@ -143,6 +144,22 @@ test('reopening keeps the saved password and asks again when the address changes
   await expect(page.locator('#pwHint')).toContainText('enter the password again');
   await next.click();
   await expect(page.locator('#pwOut')).toContainText('Enter the Owner password');
+});
+
+test('a save Decaid rejects shows the reason Decaid gives', async ({page}) => {
+  host.store.settings = {InstancesJson: JSON.stringify([{id: 'e64', name: 'E64', scheme: 'wss', host: '192.168.1.40', port: 9997, restPort: 443, pollMs: 1000, certSha256: FLEET}]),
+    TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({e64: {host: '192.168.1.40', password: 'right'}}), AdjustmentOwner: 'grinder'};
+  host.store.saves.length = 0; await host.reload();
+  host.store.reject = 'Setting "AdjustmentOwner" must be one of: off, grinder, decaid';
+  try {
+    await page.goto(`${origin}${base}/setup`);
+    const next = page.locator('[data-pu-next]');
+    await next.click(); await next.click(); await page.locator('#trust').click();
+    await next.click(); await next.click(); await next.click(); await next.click();
+    await page.locator('#save').click();
+    await expect(page.locator('#saveOut')).toHaveText('Saving failed: Setting "AdjustmentOwner" must be one of: off, grinder, decaid');
+    expect(host.store.saves).toEqual([]);
+  } finally { delete host.store.reject; }
 });
 
 test('the diagnostics surface works without a deviceId at phone width', async ({page}) => {
