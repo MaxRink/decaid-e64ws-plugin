@@ -400,7 +400,7 @@ void main() {
       expect(grind!['recipe'], {
         'index': 1, 'uuid': '00000000-0000-4000-8000-000000000001', 'mode': 'GbW',
         'type': 'Espresso, double', 'amountGr': 18, 'setting': '50',
-        'brewTimeMs': 27000, 'brewWeightGr': 36,
+        'brewTimeMs': 27000, 'brewWeightGr': 36, 'icon': 'cup', 'gbsEnabled': false,
       });
       manager.dispatchEvent(manifest.id, 'shotStored', {'id': 'shot-1'});
       Map<String, dynamic>? brew;
