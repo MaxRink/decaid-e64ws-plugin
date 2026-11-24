@@ -132,8 +132,8 @@ with the list of `deviceId`s.
 
 When the grinder's state leaves the grind cycle (`Grind`, `GbwPostGrind` and the
 manual and timed start states) the plugin records a grind event: completion time
-as observed by the plugin, target and result weight, motor run time and the
-displayed setting. The latest 20 per instance are returned by
+as observed by the plugin, target and result weight, overshoot, motor run time,
+the mode (`GbW`/`GbT`, when the grind states showed it) and the displayed setting. The latest 20 per instance are returned by
 `GET /api/v1/plugins/mahlkoenig-e64.reaplugin/grind-events?deviceId=<deviceId>`
 and appear as `grindEvents` in the default diagnostics view, with no serial
 number or session ID.
@@ -233,6 +233,33 @@ done), and none when nothing changed, so plugins reacting to `workflowUpdated`
 are not driven into a loop. With `SyncWorkflowGrinder` `"false"` the plugin only
 links an empty workflow, as `LinkWorkflowGrinder` did in 0.6.
 
+## Grind dose
+
+`RecordGrindDose` (default `"false"`; the setup page's "Record each grind as the
+shot's dose" switch) stores what the grinder actually ground with each shot. It
+applies only while this grinder is the workflow's grinder:
+
+- After a grind-by-weight grind (`GbW`) the workflow's `targetDoseWeight` becomes
+  the grinder's target, through the same deferred, partial workflow write as the
+  setting (so it needs `SyncWorkflowGrinder`). Only a new grind writes it: a
+  dose you change afterwards is kept until the next grind. `targetYield` is not
+  touched.
+- When Decaid stores a shot whose workflow names this grinder and that started
+  at most 5 minutes after a grind (or up to 1 minute before it, for clock skew),
+  the plugin writes the shot's `annotations.actualDoseWeight` as the ground weight
+  (rounded to 0.1 g) and `annotations.extras["mahlkoenig-e64.reaplugin"].grind`
+  with `completedAt`, `secondsBeforeShot`, `mode`, `targetWeightGr`,
+  `resultWeightGr`, `deviationGr`, `overshootWeightGr`, `motorRunTimeMs`,
+  `setting` and, once the grinder log has been read, `grindUuid`,
+  `grindDurationMs` and `successful`. A grind the log marks as failed is not used.
+  The shot start comes from the machine's state stream; the shot record's own
+  timestamp is the fallback.
+
+Decaid merges the update into the shot, so other annotations and other plugins'
+`extras` stay. The Visualizer plugin uploads a shot 5 s after it ends and sends
+later edits as updates, so Visualizer's dose is the ground weight too. The
+diagnostics page's "Dose recording" row shows the last result.
+
 ## Grinder control
 
 Control is off by default and needs `AllowControl` `"true"`, `MintTokens`, and a
@@ -312,7 +339,7 @@ See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
 
 ## Installation
 
-Version 0.7.3 requires a Decaid build containing the read-only Grinder observation
+Version 0.7.4 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and the plugin `notifications` permission (#1003), and tracks upstream Decaid
 `main` (verified against `1d74fbf7` on 2026-11-23), in addition to runtime-v2 and validated device
 surfaces. `certSha256` pinning needs a host with `tlsPinSha256` support; older hosts ignore it. The stable `0.8.8` release has not been

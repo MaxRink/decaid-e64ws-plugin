@@ -263,6 +263,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const populateGrinder = jsonSetting(settings, "PopulateGrinderRecord", true);
     const linkWorkflow = jsonSetting(settings, "LinkWorkflowGrinder", true);
     const syncWorkflow = jsonSetting(settings, "SyncWorkflowGrinder", true);
+    const recordDose = jsonSetting(settings, "RecordGrindDose", false);
+    if (typeof recordDose !== "boolean") fail("RecordGrindDose must be true or false");
     if (typeof syncWorkflow !== "boolean") fail("SyncWorkflowGrinder must be true or false");
     if (typeof populateGrinder !== "boolean" || typeof linkWorkflow !== "boolean") fail("PopulateGrinderRecord and LinkWorkflowGrinder must be true or false");
     const syncBacklight = jsonSetting(settings, "SyncBacklight", false);
@@ -295,7 +297,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       if (mintTokens && !token && !password && !allowNoPassword) fail("MintTokens needs a password or AllowNoPasswordWorkaround for " + id);
       ids.add(id);
       return {id, name, scheme, host: row.host, port: row.port, pollMs, token, certSha256, restPort,
-        password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner, populateGrinder, linkWorkflow, syncWorkflow};
+        password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner, populateGrinder, linkWorkflow, syncWorkflow, recordDose};
     });
     if (Object.keys(tokens).some((id) => !ids.has(id))) fail("TokensJson contains an unknown id");
     if (Object.keys(passwords).some((id) => !ids.has(id))) fail("PasswordsJson contains an unknown id");
@@ -497,7 +499,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       serviceRows: [], logTimer: null, restToken: null, restCookie: null,
       inventory: {status: config.populateGrinder ? "pending" : "disabled", grinderId: null, model: null, archived: false, workflowLink: null, duplicates: 0, lastSyncAt: null, lastError: null},
       workflow: {enabled: config.populateGrinder && config.syncWorkflow, lastWriteAt: null, lastWriteMs: 0, lastWritten: null, lastError: null, writes: 0,
-        display: null, displayAt: 0, ddValueDum: null, meta: null, override: null}, workflowTimer: null};
+        display: null, displayAt: 0, ddValueDum: null, meta: null, override: null, doseTarget: null, lastDose: null}, workflowTimer: null};
   }
   function clear(instance) {
     if (instance.poll !== null) clearTimeout(instance.poll); instance.poll = null; clearTimeout(instance.observationExpiry); instance.observationExpiry = null;
@@ -633,13 +635,16 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const finite = (value) => typeof value === "number" && Number.isFinite(value) ? value : null;
     instance.grindEvents.unshift({grindUuid: null, completedAt: new Date().toISOString(), completedAtMs: Date.now(),
       targetWeightGr: finite(data.grindTargetWeightGr), resultWeightGr: finite(data.grindResultWeightGr),
-      motorRunTimeMs: finite(data.motorRunTimeMs), setting: setting === undefined ? null : setting, linkedShotId: null});
+      motorRunTimeMs: finite(data.motorRunTimeMs), overshootWeightGr: finite(data.overshootWeightGr), mode,
+      setting: setting === undefined ? null : setting, linkedShotId: null});
     instance.grindEvents.length = Math.min(instance.grindEvents.length, MAX_GRIND_EVENTS);
     queueLogDownload(instance, 0);
     const grind = instance.grindEvents[0];
     instance.workflow.meta = {ddValueDum: Number.isSafeInteger(data.ddValueDum) ? data.ddValueDum : null, displayedSetting: grind.setting, unit: "µm",
       lastGrind: {completedAt: grind.completedAt, targetWeightGr: grind.targetWeightGr, resultWeightGr: grind.resultWeightGr,
         motorRunTimeMs: grind.motorRunTimeMs, mode}};
+    // RecordGrindDose: a grind-by-weight target becomes the workflow's dose.
+    if (instance.config.recordDose && mode === "GbW" && grind.targetWeightGr > 0) instance.workflow.doseTarget = grind.targetWeightGr;
     scheduleWorkflowSync(instance, 0);
   }
   // --- Active workflow: grinder model, burrs, setting and pre-shot metadata ---
@@ -674,7 +679,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       const workflow = await api("GET", "/api/v1/workflow");
       const context = workflow && workflow.context && typeof workflow.context === "object" ? workflow.context : {};
       const ours = context.grinderId === record.id;
-      if (!ours && (context.grinderId || context.grinderModel || !config.linkWorkflow)) return (inventory.workflowLink = "kept-existing");
+      if (!ours && (context.grinderId || context.grinderModel || !config.linkWorkflow)) { wf.doseTarget = null; return (inventory.workflowLink = "kept-existing"); }
       inventory.workflowLink = "linked";
       const patch = {};
       if (!ours) patch.grinderId = record.id;
@@ -694,8 +699,10 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       }
       const existing = context.extras && typeof context.extras === "object" ? context.extras[PLUGIN_ID] : undefined;
       if (wf.meta && JSON.stringify(existing) !== JSON.stringify(wf.meta)) patch.extras = {[PLUGIN_ID]: wf.meta};
-      if (!Object.keys(patch).length) return "linked";
+      if (wf.doseTarget !== null && context.targetDoseWeight !== wf.doseTarget) patch.targetDoseWeight = wf.doseTarget;
+      if (!Object.keys(patch).length) { wf.doseTarget = null; return "linked"; }
       await api("PUT", "/api/v1/workflow", {context: patch});
+      wf.doseTarget = null;
       if (patch.grinderSetting !== undefined) { wf.lastWritten = patch.grinderSetting; wf.override = null; }
       Object.assign(wf, {lastWriteAt: new Date().toISOString(), lastWriteMs: Date.now(), lastError: null, writes: wf.writes + 1});
       return "linked";
@@ -914,14 +921,10 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       const times = samples.map((sample) => Date.parse(sample && sample.machine && sample.machine.timestamp)).filter(Number.isFinite);
       const brewTimeMs = times.length > 1 ? times[times.length - 1] - times[0] : 0;
       const weight = samples.length && samples[samples.length - 1].scale ? Number(samples[samples.length - 1].scale.weight) : NaN;
-      const startedAt = Date.parse(shot.timestamp);
+      const startedAt = shotStartedAt(shot);
       if (!(brewTimeMs > BREW_MIN_MS)) return result("skipped", "shot not longer than 10 s");
       if (!Number.isFinite(weight) || weight <= 0 || !Number.isFinite(startedAt)) return result("skipped", "shot has no weight or start time");
-      // Same linkage as assisted dial-in: the newest unused successful grind that
-      // completed at most 5 min before the shot start, or up to 1 min after it (clock skew).
-      const grind = instance.grindEvents.find((candidate) => candidate.linkedShotId === null &&
-        !(candidate.log && candidate.log.successful === false) &&
-        candidate.completedAtMs - startedAt <= LINK_AFTER_MS && startedAt - candidate.completedAtMs <= LINK_BEFORE_MS);
+      const grind = grindForShot(instance, shotId, startedAt);
       if (!grind) return result("skipped", "no successful grind within 5 min before the shot");
       grind.linkedShotId = shotId;
       if (!grind.grindUuid) return result("skipped", "grind uuid unavailable");
@@ -930,6 +933,47 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       result("sent");
     } catch (error) {
       result("failed", error && error.message ? error.message : "brew event failed");
+    }
+  }
+  // Same linkage as assisted dial-in: the newest successful grind not used by
+  // another shot that completed at most 5 min before the shot start, or up to
+  // 1 min after it (clock skew).
+  function grindForShot(instance, shotId, startedAt) {
+    return instance.grindEvents.find((candidate) => (candidate.linkedShotId === null || candidate.linkedShotId === shotId) &&
+      !(candidate.log && candidate.log.successful === false) &&
+      candidate.completedAtMs - startedAt <= LINK_AFTER_MS && startedAt - candidate.completedAtMs <= LINK_BEFORE_MS) || null;
+  }
+  // The shot record's timestamp carries no zone, so the start seen on the
+  // machine's state stream is preferred.
+  let espressoStartMs = null, inEspresso = false;
+  function shotStartedAt(shot) {
+    return espressoStartMs !== null && Date.now() - espressoStartMs < LINK_BEFORE_MS + 30 * 60000 ? espressoStartMs : Date.parse(shot.timestamp);
+  }
+  // RecordGrindDose: the grind before a shot becomes the shot's actual dose,
+  // with the grind's details under annotations.extras.
+  async function recordShotDose(instance, shotId) {
+    const result = (status, reason) => { instance.workflow.lastDose = {shotId, status, reason: reason || null, at: new Date().toISOString()}; };
+    try {
+      const shot = await api("GET", "/api/v1/shots/" + encodeURIComponent(shotId));
+      const context = shot.workflow && shot.workflow.context ? shot.workflow.context : {};
+      if (instance.inventory.grinderId === null || context.grinderId !== instance.inventory.grinderId) return result("skipped", "the shot's workflow names another grinder");
+      const startedAt = shotStartedAt(shot);
+      const grind = grindForShot(instance, shotId, startedAt);
+      if (!grind) return result("skipped", "no grind within 5 min before the shot");
+      if (!(grind.resultWeightGr > 0)) return result("skipped", "the grinder reported no ground weight");
+      grind.linkedShotId = shotId;
+      const round = (value, digits) => typeof value === "number" ? Math.round(value * Math.pow(10, digits)) / Math.pow(10, digits) : null;
+      const log = grind.log || {};
+      const details = {completedAt: grind.completedAt, secondsBeforeShot: Math.round((startedAt - grind.completedAtMs) / 1000), mode: grind.mode || null,
+        targetWeightGr: grind.targetWeightGr, resultWeightGr: grind.resultWeightGr,
+        deviationGr: grind.targetWeightGr > 0 ? round(grind.resultWeightGr - grind.targetWeightGr, 3) : null,
+        overshootWeightGr: grind.overshootWeightGr === undefined ? null : grind.overshootWeightGr, motorRunTimeMs: grind.motorRunTimeMs,
+        setting: grind.setting, grindUuid: grind.grindUuid, grindDurationMs: log.grindDurationMs === undefined ? null : log.grindDurationMs,
+        successful: log.successful === undefined ? null : log.successful};
+      await api("PUT", "/api/v1/shots/" + encodeURIComponent(shotId), {annotations: {actualDoseWeight: round(grind.resultWeightGr, 1), extras: {[PLUGIN_ID]: {grind: details}}}});
+      result("recorded");
+    } catch (error) {
+      result("failed", error && error.message ? error.message : "dose recording failed");
     }
   }
   // --- Decaid grinder inventory -------------------------------------------
@@ -1190,7 +1234,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   </fieldset>
   <div class="pu-card">
     <div class="pu-row"><label for="populate">Add this grinder to my grinders</label><input id="populate" type="checkbox" role="switch" class="pu-switch" checked></div>
-    <div class="pu-row"><label for="link">Use it in my current workflow</label><input id="link" type="checkbox" role="switch" class="pu-switch" checked></div></div>
+    <div class="pu-row"><label for="link">Use it in my current workflow</label><input id="link" type="checkbox" role="switch" class="pu-switch" checked></div>
+    <div class="pu-row"><label for="recordDose">Record each grind as the shot's dose</label><input id="recordDose" type="checkbox" role="switch" class="pu-switch"><p class="pu-hint">After a grind-by-weight grind, the workflow's dose becomes the grinder's target. A shot started within 5 minutes stores the weight the grinder measured as its actual dose, with the grind's details.</p></div></div>
 </section>
 <section data-pu-step hidden>
   <h2>Grinder control (optional)</h2>
@@ -1234,6 +1279,7 @@ async function load() {
     if (owner && !owner.disabled) owner.checked = true;
     $("populate").checked = settings.PopulateGrinderRecord !== "false";
     $("link").checked = settings.LinkWorkflowGrinder !== "false";
+    $("recordDose").checked = settings.RecordGrindDose === "true";
     $("allowControl").checked = settings.AllowControl === "true";
     $("syncBacklight").checked = settings.SyncBacklight === "true";
     $("backlightRow").hidden = !$("allowControl").checked;
@@ -1280,7 +1326,7 @@ function draft() {
   const instance = {id: state.instanceId, name: $("name").value.trim() || "Mahlkönig E64", scheme: "wss", host: t.host, port: t.port, restPort: t.restPort, pollMs: 1000, certSha256: state.certSha256};
   const typed = $("password").value;
   const settings = {InstancesJson: JSON.stringify([instance]), TokensJson: "{}", MintTokens: "true",
-    AdjustmentOwner: owner, PopulateGrinderRecord: String($("populate").checked), LinkWorkflowGrinder: String($("link").checked),
+    AdjustmentOwner: owner, PopulateGrinderRecord: String($("populate").checked), LinkWorkflowGrinder: String($("link").checked), RecordGrindDose: String($("recordDose").checked),
     AllowControl: String($("allowControl").checked), SyncBacklight: String($("allowControl").checked && $("syncBacklight").checked)};
   if (typed) settings.PasswordsJson = JSON.stringify({[state.instanceId]: {host: t.host, password: typed}});
   else if (state.passwordSet && !hostChanged()) settings.PasswordsJson = {isSet: true};
@@ -1343,7 +1389,8 @@ load();
     const rows = [["Connected", instance.connected ? "yes" : "no"], ["Display", instance.workflow.display === null ? "–" : instance.workflow.display + " µm"],
       ["Token", instance.tokenSource], ["Last login error", instance.lastMintError || "–"], ["Grinder record", inventory.status],
       ["Workflow", inventory.workflowLink || "–"], ["Grind log", instance.grindLog.status], ["Control", instance.control.debugMode],
-      ["Adjustment owner", instance.control.owner], ["Grind events", String(instance.grindEvents.length)]];
+      ["Adjustment owner", instance.control.owner], ["Grind events", String(instance.grindEvents.length)],
+      ["Dose recording", !instance.config.recordDose ? "off" : instance.workflow.lastDose ? instance.workflow.lastDose.status + (instance.workflow.lastDose.reason ? ": " + instance.workflow.lastDose.reason : "") : "on, no shot yet"]];
     return htmlPage("E64 diagnostics", "<header class=\"pu-header\"><h1>" + escapeHtml(instance.config.name) + "</h1><button type=\"button\" class=\"pu-btn pu-secondary\" data-pu-done>Done</button></header><div class=\"pu-card\">" +
       rows.map(([k, v]) => "<div class=\"pu-row\"><b>" + escapeHtml(k) + "</b><span>" + escapeHtml(v) + "</span></div>").join("") + "</div>", "pu.init({fit: true});");
   }
@@ -1372,6 +1419,9 @@ load();
       if (event.name === "stateUpdate") {
         updateXenia(event.payload); syncBacklight(event.payload);
         const active = Boolean(event.payload.state && ACTIVE_STATES.includes(event.payload.state.state));
+        const espresso = Boolean(event.payload.state && event.payload.state.state === "espresso");
+        if (espresso && !inEspresso) espressoStartMs = Date.now();
+        inEspresso = espresso;
         if (active !== machineActive) {
           machineActive = active;
           // Writes deferred during a shot, steam, hot water or flush run once the machine is done.
@@ -1379,7 +1429,10 @@ load();
         }
       }
       if (event.name === "shotStored" && typeof event.payload.id === "string") {
-        for (const instance of instances.values()) if (instance.control.owner === "grinder" && instance.control.debugMode === "available") brewEvent(instance, event.payload.id);
+        for (const instance of instances.values()) {
+          if (instance.config.recordDose) recordShotDose(instance, event.payload.id);
+          if (instance.control.owner === "grinder" && instance.control.debugMode === "available") brewEvent(instance, event.payload.id);
+        }
       }
     },
     handleHttpRequest(request) {

@@ -746,7 +746,7 @@ test('completed grinds become grind events without a uuid', async () => {
   const events = JSON.parse(loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}).body).events;
   assert.equal(events.length, 1);
   assert.deepEqual({...events[0], completedAt: typeof events[0].completedAt},
-    {grindUuid: null, completedAt: 'string', targetWeightGr: 18, resultWeightGr: 18.07, motorRunTimeMs: 8300, setting: '82', linkedShotId: null});
+    {grindUuid: null, completedAt: 'string', targetWeightGr: 18, resultWeightGr: 18.07, motorRunTimeMs: 8300, overshootWeightGr: null, mode: 'GbW', setting: '82', linkedShotId: null});
   const diagnostics = JSON.parse((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query})).body);
   assert.equal(diagnostics.grindEvents.length, 1);
   assert.equal(JSON.stringify(diagnostics).includes('secret'), false);
@@ -1046,14 +1046,14 @@ test('two records owned by the same instance resolve to the oldest without delet
   assert.deepEqual(run.writes.map((call) => call.path), ['/api/v1/workflow']);
 });
 
-async function workflowHarness({workflow = {context: {targetYield: 36, extras: {dialin: {plan: 'keep'}}}, profile: {title: 'P'}}, grinders = []} = {}) {
+async function workflowHarness({workflow = {context: {targetYield: 36, extras: {dialin: {plan: 'keep'}}}, profile: {title: 'P'}}, grinders = [], shots = {}, extra = {}} = {}) {
   let now = Date.parse('2026-11-23T12:00:00Z');
   class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const pending = new Map(); let nextTimer = 0;
   const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay, at: now + delay}); return id;}, clearTimeout: id => pending.delete(id), Date: FakeDate};
-  const decaid = decaidApi({workflow, grinders});
+  const decaid = decaidApi({workflow, grinders, shots});
   const fixture = {sent: [], events: []};
-  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}}), PopulateGrinderRecord: 'true'}, fixture, timers, hostFetch([], decaid));
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}}), PopulateGrinderRecord: 'true', ...extra}, fixture, timers, hostFetch([], decaid));
   const answeredIds = new Set();
   let dd = 819, grindState = 'Idle';
   const respond = () => {
@@ -1128,6 +1128,48 @@ test('workflow writes wait for the machine and respect a user-set grinder settin
   h.setGrind('Grind'); await h.advance(200); h.setGrind('Idle'); await h.advance(4000);
   assert.equal(h.context().grinderSetting, '76', 'after 10 minutes the grinder reading wins again');
   await h.loaded.plugin.onUnload();
+});
+
+test('RecordGrindDose sets the target dose and stores the ground weight and grind details on the shot', async () => {
+  const shots = {};
+  const shot = (id, grinderId) => ({id, timestamp: '2026-11-23T13:00:00', workflow: {context: {grinderId, targetDoseWeight: 18}},
+    annotations: {actualDoseWeight: 18, actualYield: 36, extras: {other: {keep: true}}}});
+  const h = await workflowHarness({extra: {RecordGrindDose: 'true'}, shots, workflow: {context: {targetDoseWeight: 20, targetYield: 40}}});
+  await h.advance(3500);
+  h.setGrind('GbwPostGrind'); await h.advance(200); h.setGrind('Idle'); await h.advance(4000);
+  assert.deepEqual([h.context().targetDoseWeight, h.context().targetYield], [18, 40], 'the grinder target is the dose; the yield stays');
+  h.context().targetDoseWeight = 19;
+  h.setDial(830); await h.advance(5000);
+  assert.equal(h.context().targetDoseWeight, 19, 'only a new grind writes the dose');
+
+  h.loaded.plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'espresso', substate: 'preinfusion'}}});
+  await h.advance(30000);
+  h.loaded.plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'idle', substate: 'idle'}}});
+  shots.s1 = shot('s1', h.decaid.grinders[0].id);
+  h.loaded.plugin.onEvent({name: 'shotStored', payload: {id: 's1'}});
+  await h.advance(10);
+  const {annotations} = shots.s1;
+  assert.equal(annotations.actualDoseWeight, 18.1);
+  assert.equal(annotations.actualYield, 36);
+  assert.deepEqual(annotations.extras.other, {keep: true});
+  const grind = annotations.extras['mahlkoenig-e64.reaplugin'].grind;
+  assert.deepEqual({...grind, completedAt: typeof grind.completedAt}, {completedAt: 'string', secondsBeforeShot: 9, mode: 'GbW', targetWeightGr: 18, resultWeightGr: 18.1,
+    deviationGr: 0.1, overshootWeightGr: null, motorRunTimeMs: 8300, setting: '82', grindUuid: null, grindDurationMs: null, successful: null});
+
+  shots.s2 = shot('s2', 'other-grinder');
+  h.loaded.plugin.onEvent({name: 'shotStored', payload: {id: 's2'}});
+  await h.advance(10);
+  assert.equal(shots.s2.annotations.actualDoseWeight, 18, 'a shot with another grinder is left alone');
+  await h.loaded.plugin.onUnload();
+
+  const off = await workflowHarness({shots: {s1: shot('s1', null)}, workflow: {context: {targetDoseWeight: 20}}});
+  await off.advance(3500);
+  off.setGrind('GbwPostGrind'); await off.advance(200); off.setGrind('Idle'); await off.advance(4000);
+  off.loaded.plugin.onEvent({name: 'shotStored', payload: {id: 's1'}});
+  await off.advance(10);
+  assert.equal(off.context().targetDoseWeight, 20, 'off by default');
+  assert.equal(off.decaid.calls.some((call) => call.method === 'PUT' && call.path.startsWith('/api/v1/shots/')), false);
+  await off.loaded.plugin.onUnload();
 });
 
 test('another grinder in the workflow is left alone and the same value is never rewritten', async () => {

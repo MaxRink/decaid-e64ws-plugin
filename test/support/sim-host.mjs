@@ -116,6 +116,14 @@ async function request(target, method, route, body, headers = {}) {
 
 // Emulates the Decaid REST routes the plugin uses, with the host's semantics:
 // grinder PUT merges top-level fields (extras is replaced), workflow PUT deep-merges.
+// Mirrors the host's deepMergeJson: objects merge recursively, everything else replaces.
+function deepMerge(base, update) {
+  for (const [key, value] of Object.entries(update)) {
+    if (value && typeof value === 'object' && !Array.isArray(value) && base[key] && typeof base[key] === 'object' && !Array.isArray(base[key])) deepMerge(base[key], value);
+    else base[key] = value;
+  }
+}
+
 export function decaidApi({shots = {}, grinders = [], workflow = {context: {}}} = {}) {
   const state = {shots, grinders, workflow, calls: []};
   state.handle = (method, path, body) => {
@@ -126,6 +134,12 @@ export function decaidApi({shots = {}, grinders = [], workflow = {context: {}}} 
     if ((match = route.match(/^\/api\/v1\/shots\/([^/]+)$/)) && method === 'GET') {
       const record = shots[decodeURIComponent(match[1])];
       return record ? json(200, record) : json(404, {error: 'not found'});
+    }
+    if ((match = route.match(/^\/api\/v1\/shots\/([^/]+)$/)) && method === 'PUT') {
+      const record = shots[decodeURIComponent(match[1])];
+      if (!record) return json(404, {error: 'not found'});
+      deepMerge(record, body);
+      return json(200, record);
     }
     if (route === '/api/v1/grinders' && method === 'GET') return json(200, grinders.filter((g) => query.includes('includeArchived=true') || !g.archived));
     if (route === '/api/v1/grinders' && method === 'POST') {
@@ -145,14 +159,7 @@ export function decaidApi({shots = {}, grinders = [], workflow = {context: {}}} 
     }
     if (route === '/api/v1/workflow' && method === 'GET') return json(200, workflow);
     if (route === '/api/v1/workflow' && method === 'PUT') {
-      // Mirrors the host's deepMergeJson: objects merge recursively, everything else replaces.
-      const merge = (base, update) => {
-        for (const [key, value] of Object.entries(update)) {
-          if (value && typeof value === 'object' && !Array.isArray(value) && base[key] && typeof base[key] === 'object' && !Array.isArray(base[key])) merge(base[key], value);
-          else base[key] = value;
-        }
-      };
-      merge(workflow, body);
+      deepMerge(workflow, body);
       state.workflowWrites = (state.workflowWrites || 0) + 1;
       return json(200, workflow);
     }
