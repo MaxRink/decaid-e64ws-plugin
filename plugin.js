@@ -752,7 +752,14 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       if (!grindCsv && !serviceCsv) throw new Error("grind log CSV missing");
       if (grindCsv) {
         const rows = grindRows(utf8(grindCsv));
-        for (const grind of instance.grindEvents) if (!grind.grindUuid) { const row = matchGrindRow(instance, grind, rows); if (row) applyGrindRow(grind, row); }
+        for (const grind of instance.grindEvents) {
+          if (grind.grindUuid) continue;
+          const row = matchGrindRow(instance, grind, rows);
+          if (!row) continue;
+          applyGrindRow(grind, row);
+          // The log usually arrives after the shot: complete the shot's grind block then.
+          if (grind.doseShot) writeShotGrind(grind, false).catch(() => {});
+        }
       }
       if (serviceCsv) mergeServiceRows(instance, utf8(serviceCsv));
       Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0});
@@ -818,10 +825,12 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const um = (key) => { const dum = num(key); return dum === null ? null : String(Math.floor((dum + 5) / 10)); };
     const text = (key) => typeof row[key] === "string" && row[key] !== "" ? row[key].slice(0, 128) : null;
     grind.grindUuid = text("grind_uuid");
+    grind.trigger = text("grind_trigger");
     grind.log = {grindWeightGr: num("grind_weight", 1000), grindDurationMs: num("grind_duration"), setting: um("grind_ddd"),
       successful: row.grind_successfull === undefined ? null : row.grind_successfull === "1" || row.grind_successfull === "true"};
     grind.recipe = {index: num("recipe_index"), uuid: text("recipe_uuid"), mode: text("recipe_mode"), type: text("recipe_type"),
-      amountGr: num("recipe_amount", 1000), setting: um("recipe_coarseness"), brewTimeMs: num("recipe_brew_time"), brewWeightGr: num("recipe_brew_weight", 1000)};
+      amountGr: num("recipe_amount", 1000), setting: um("recipe_coarseness"), brewTimeMs: num("recipe_brew_time"), brewWeightGr: num("recipe_brew_weight", 1000),
+      icon: text("recipe_icon"), gbsEnabled: row.recipe_gbs_enabled === undefined || row.recipe_gbs_enabled === "" ? null : row.recipe_gbs_enabled === "1" || row.recipe_gbs_enabled === "true"};
   }
   // Debug-mode probe on a throwaway connection with its own token: a locked
   // image closes the socket on any dev=1 command, so the main session is never
@@ -962,19 +971,36 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       if (!grind) return result("skipped", "no grind within 5 min before the shot");
       if (!(grind.resultWeightGr > 0)) return result("skipped", "the grinder reported no ground weight");
       grind.linkedShotId = shotId;
-      const round = (value, digits) => typeof value === "number" ? Math.round(value * Math.pow(10, digits)) / Math.pow(10, digits) : null;
-      const log = grind.log || {};
-      const details = {completedAt: grind.completedAt, secondsBeforeShot: Math.round((startedAt - grind.completedAtMs) / 1000), mode: grind.mode || null,
-        targetWeightGr: grind.targetWeightGr, resultWeightGr: grind.resultWeightGr,
-        deviationGr: grind.targetWeightGr > 0 ? round(grind.resultWeightGr - grind.targetWeightGr, 3) : null,
-        overshootWeightGr: grind.overshootWeightGr === undefined ? null : grind.overshootWeightGr, motorRunTimeMs: grind.motorRunTimeMs,
-        setting: grind.setting, grindUuid: grind.grindUuid, grindDurationMs: log.grindDurationMs === undefined ? null : log.grindDurationMs,
-        successful: log.successful === undefined ? null : log.successful};
-      await api("PUT", "/api/v1/shots/" + encodeURIComponent(shotId), {annotations: {actualDoseWeight: round(grind.resultWeightGr, 1), extras: {[PLUGIN_ID]: {grind: details}}}});
+      grind.doseShot = {id: shotId, startedAt};
+      await writeShotGrind(grind, true);
       result("recorded");
     } catch (error) {
       result("failed", error && error.message ? error.message : "dose recording failed");
     }
+  }
+  // The shot's grind block: what was ground, how the grind was started, and the
+  // recipe the grinder used. Log-derived fields stay null until the grinder log
+  // has been read. withDose also sets the shot's actual dose; a later refresh
+  // leaves the dose alone so an edit made in the meantime is kept.
+  function writeShotGrind(grind, withDose) {
+    const round = (value, digits) => typeof value === "number" ? Math.round(value * Math.pow(10, digits)) / Math.pow(10, digits) : null;
+    const log = grind.log || {}, recipe = grind.recipe || null, trigger = grind.trigger || null;
+    const near = (a, b, tolerance) => typeof a === "number" && typeof b === "number" ? Math.abs(a - b) <= tolerance : null;
+    const details = {completedAt: grind.completedAt, secondsBeforeShot: Math.round((grind.doseShot.startedAt - grind.completedAtMs) / 1000), mode: grind.mode || null,
+      targetWeightGr: grind.targetWeightGr, resultWeightGr: grind.resultWeightGr,
+      deviationGr: grind.targetWeightGr > 0 ? round(grind.resultWeightGr - grind.targetWeightGr, 3) : null,
+      overshootWeightGr: grind.overshootWeightGr === undefined ? null : grind.overshootWeightGr, motorRunTimeMs: grind.motorRunTimeMs,
+      setting: grind.setting, grindUuid: grind.grindUuid, grindDurationMs: log.grindDurationMs === undefined ? null : log.grindDurationMs,
+      successful: log.successful === undefined ? null : log.successful,
+      trigger, portafilterRecognized: trigger === null ? null : trigger === "PortafilterDetection",
+      recipe: recipe && {...recipe,
+        // Whether the grinder applied the recipe: its dose within 0.5 g of the
+        // weighed result, its coarseness equal to the displayed setting.
+        doseApplied: near(recipe.amountGr, grind.resultWeightGr, 0.5),
+        settingApplied: recipe.setting === null || (log.setting || grind.setting) == null ? null : recipe.setting === (log.setting || grind.setting)}};
+    const annotations = {extras: {[PLUGIN_ID]: {grind: details}}};
+    if (withDose) annotations.actualDoseWeight = round(grind.resultWeightGr, 1);
+    return api("PUT", "/api/v1/shots/" + encodeURIComponent(grind.doseShot.id), {annotations});
   }
   // --- Decaid grinder inventory -------------------------------------------
   // One Decaid grinder record per instance, so shots carry this grinder. The

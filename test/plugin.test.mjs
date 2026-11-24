@@ -888,7 +888,7 @@ test('grind logs are matched by dose and time, coalesced, and fetched with the c
   assert.deepEqual([download.init.method, download.init.responseType, download.init.headers.Cookie, download.init.headers.Authorization], ['POST', 'base64', 'PHPSESSID=abc', 'Bearer t1']);
   const [event] = h.events().events;
   assert.equal(event.grindUuid, 'uuid-match', 'the target weight rules out the newer 20 g row');
-  assert.deepEqual(event.recipe, {index: 1, uuid: 'r1', mode: 'GbW', type: 'Espresso, double', amountGr: 18, setting: '50', brewTimeMs: 27000, brewWeightGr: 36});
+  assert.deepEqual(event.recipe, {index: 1, uuid: 'r1', mode: 'GbW', type: 'Espresso, double', amountGr: 18, setting: '50', brewTimeMs: 27000, brewWeightGr: 36, icon: null, gbsEnabled: null});
   assert.deepEqual(event.log, {grindWeightGr: 18.07, grindDurationMs: 8300, setting: '82', successful: true});
   const service = JSON.parse(h.service().body);
   assert.equal(service.instance, 'one');
@@ -1046,14 +1046,15 @@ test('two records owned by the same instance resolve to the oldest without delet
   assert.deepEqual(run.writes.map((call) => call.path), ['/api/v1/workflow']);
 });
 
-async function workflowHarness({workflow = {context: {targetYield: 36, extras: {dialin: {plan: 'keep'}}}, profile: {title: 'P'}}, grinders = [], shots = {}, extra = {}} = {}) {
+async function workflowHarness({workflow = {context: {targetYield: 36, extras: {dialin: {plan: 'keep'}}}, profile: {title: 'P'}}, grinders = [], shots = {}, extra = {}, grinderFetch = null} = {}) {
   let now = Date.parse('2026-11-23T12:00:00Z');
   class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const pending = new Map(); let nextTimer = 0;
   const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay, at: now + delay}); return id;}, clearTimeout: id => pending.delete(id), Date: FakeDate};
   const decaid = decaidApi({workflow, grinders, shots});
   const fixture = {sent: [], events: []};
-  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}}), PopulateGrinderRecord: 'true', ...extra}, fixture, timers, hostFetch([], decaid));
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}}), PopulateGrinderRecord: 'true', ...extra}, fixture, timers,
+    grinderFetch ? ((base) => (url, init) => grinderFetch(url, init) || base(url, init))(hostFetch([], decaid)) : hostFetch([], decaid));
   const answeredIds = new Set();
   let dd = 819, grindState = 'Idle';
   const respond = () => {
@@ -1154,7 +1155,8 @@ test('RecordGrindDose sets the target dose and stores the ground weight and grin
   assert.deepEqual(annotations.extras.other, {keep: true});
   const grind = annotations.extras['mahlkoenig-e64.reaplugin'].grind;
   assert.deepEqual({...grind, completedAt: typeof grind.completedAt}, {completedAt: 'string', secondsBeforeShot: 9, mode: 'GbW', targetWeightGr: 18, resultWeightGr: 18.1,
-    deviationGr: 0.1, overshootWeightGr: null, motorRunTimeMs: 8300, setting: '82', grindUuid: null, grindDurationMs: null, successful: null});
+    deviationGr: 0.1, overshootWeightGr: null, motorRunTimeMs: 8300, setting: '82', grindUuid: null, grindDurationMs: null, successful: null,
+    trigger: null, portafilterRecognized: null, recipe: null});
 
   shots.s2 = shot('s2', 'other-grinder');
   h.loaded.plugin.onEvent({name: 'shotStored', payload: {id: 's2'}});
@@ -1170,6 +1172,53 @@ test('RecordGrindDose sets the target dose and stores the ground weight and grin
   assert.equal(off.context().targetDoseWeight, 20, 'off by default');
   assert.equal(off.decaid.calls.some((call) => call.method === 'PUT' && call.path.startsWith('/api/v1/shots/')), false);
   await off.loaded.plugin.onUnload();
+});
+
+test('a grinder log that arrives after the shot adds the trigger, the recipe and whether the grinder applied it', async () => {
+  const header = grindHeader + ',grind_trigger,recipe_icon,recipe_gbs_enabled';
+  const stamp = stampAt(Date.parse('2026-11-23T12:00:30Z'));
+  const rowA = `1,uuid-a,${stamp},819,8000,18050,1,1,r1,GbW,18000,Espresso,0,27000,36000,StartButton,Cup,0`;
+  const rowB = `2,uuid-b,${stamp},830,8300,18100,1,2,r2,GbW,18000,"Espresso, double",830,27000,36000,PortafilterDetection,Double,1`;
+  let rows = [rowA];
+  let downloads = 0;
+  const grinderFetch = (url) => {
+    if (url.endsWith('/login')) return Promise.resolve({ok: true, status: 200, headers: {get: (name) => name === 'authorization' ? 'Bearer t1' : 'PHPSESSID=abc; path=/'}, text: async () => ''});
+    if (url.endsWith('/download_machine_logs')) {
+      downloads++;
+      const zip = zipOf([{name: 'HemroE64WSGrindLogs_SN1_x.csv', data: [header, ...rows].join('\n'), method: 8}]);
+      return Promise.resolve({ok: true, status: 200, headers: {get: () => null}, base64: async () => zip.toString('base64')});
+    }
+    return null;
+  };
+  const shots = {};
+  const h = await workflowHarness({shots, grinderFetch,
+    extra: {RecordGrindDose: 'true', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})}});
+  await h.advance(3500);
+  h.setGrind('GbwPostGrind'); await h.advance(200); h.setGrind('Idle'); await h.advance(4000);
+  assert.equal(downloads, 1, 'the first grind reads the log at once');
+  h.setDial(830); await h.advance(4000);
+  rows = [rowB, rowA];
+  h.setGrind('GbwPostGrind'); await h.advance(200); h.setGrind('Idle'); await h.advance(4000);
+  assert.equal(downloads, 1, 'a second grind within 10 minutes waits for the next read');
+
+  h.loaded.plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'espresso', substate: 'preinfusion'}}});
+  await h.advance(30000);
+  h.loaded.plugin.onEvent({name: 'stateUpdate', payload: {state: {state: 'idle', substate: 'idle'}}});
+  shots.s1 = {id: 's1', timestamp: '2026-11-23T13:00:00', workflow: {context: {grinderId: h.decaid.grinders[0].id}}, annotations: {actualDoseWeight: 18}};
+  h.loaded.plugin.onEvent({name: 'shotStored', payload: {id: 's1'}});
+  await h.advance(10);
+  const before = shots.s1.annotations.extras['mahlkoenig-e64.reaplugin'].grind;
+  assert.deepEqual([before.grindUuid, before.trigger, before.portafilterRecognized, before.recipe], [null, null, null, null]);
+  shots.s1.annotations.actualDoseWeight = 18.3; // the user corrects the dose meanwhile
+
+  await h.advance(10 * 60000);
+  assert.equal(downloads, 2);
+  const grind = shots.s1.annotations.extras['mahlkoenig-e64.reaplugin'].grind;
+  assert.equal(shots.s1.annotations.actualDoseWeight, 18.3, 'the late update leaves the dose alone');
+  assert.deepEqual([grind.grindUuid, grind.trigger, grind.portafilterRecognized, grind.successful, grind.grindDurationMs], ['uuid-b', 'PortafilterDetection', true, true, 8300]);
+  assert.deepEqual(grind.recipe, {index: 2, uuid: 'r2', mode: 'GbW', type: 'Espresso, double', amountGr: 18, setting: '83', brewTimeMs: 27000, brewWeightGr: 36,
+    icon: 'Double', gbsEnabled: true, doseApplied: true, settingApplied: true});
+  await h.loaded.plugin.onUnload();
 });
 
 test('another grinder in the workflow is left alone and the same value is never rewritten', async () => {

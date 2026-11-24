@@ -3,7 +3,7 @@
   "name": "Mahlkönig E64",
   "author": "Decaid contributors",
   "description": "Read-only Mahlkönig E64 grinder telemetry over WebSocket.",
-  "version": "0.7.4",
+  "version": "0.7.5",
   "apiVersion": 1,
   "permissions": [
     "api",
@@ -217,7 +217,7 @@
         "false"
       ],
       "label": "Record each grind as the shot's dose",
-      "description": "While this grinder is the workflow's grinder: after a grind-by-weight grind, set the workflow's dose to the grinder's target; after a shot that started within 5 minutes of a grind, store the ground weight as the shot's actual dose and the grind's details (target, result, deviation, overshoot, setting, motor time, age) under annotations.extras. Needs Keep the workflow's grinder details current for the target dose. Default false.",
+      "description": "While this grinder is the workflow's grinder: after a grind-by-weight grind, set the workflow's dose to the grinder's target; after a shot that started within 5 minutes of a grind, store the ground weight as the shot's actual dose and the grind's details (target, result, deviation, overshoot, setting, motor time, age, and from the grinder log the trigger, whether the portafilter was recognized, and the recipe with whether its dose and coarseness were applied) under annotations.extras. Needs Keep the workflow's grinder details current for the target dose. Default false.",
       "default": "false",
       "valueLabels": {
         "true": "On",

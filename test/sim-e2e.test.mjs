@@ -275,7 +275,7 @@ test('grinder ownership links shots to grinds and applies the brew-event gates',
     await until(async () => (await session.diagnostics('grind-events')).body.events[0]?.grindUuid, 'grind log uuid');
     const [grind] = (await session.diagnostics('grind-events')).body.events;
     assert.deepEqual(grind.recipe, {index: 1, uuid: '00000000-0000-4000-8000-000000000001', mode: 'GbW', type: 'Espresso, double',
-      amountGr: 18, setting: '50', brewTimeMs: 27000, brewWeightGr: 36});
+      amountGr: 18, setting: '50', brewTimeMs: 27000, brewWeightGr: 36, icon: 'cup', gbsEnabled: false});
     assert.deepEqual([grind.log.setting, grind.log.grindWeightGr, grind.log.successful], ['500', 18, true]);
     assert.equal((await brew('short', shotRecord(Date.now() + 1000, 9, 36))).reason, 'shot not longer than 10 s');
     assert.equal((await brew('stale', shotRecord(Date.now() + 6 * 60000, 28, 36))).reason, 'no successful grind within 5 min before the shot');
