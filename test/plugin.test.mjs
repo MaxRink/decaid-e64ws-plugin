@@ -735,7 +735,7 @@ test('completed grinds become grind events without a uuid', async () => {
   answer(fixture, 0, {grindState: 'Grind', ddValueDum: 819, ddSensorFailed: false});
   await connected;
   const states = [{grindState: 'GbwPostGrind', ddValueDum: 819, ddSensorFailed: false},
-    {grindState: 'Idle', ddValueDum: 819, ddSensorFailed: false, grindTargetWeightGr: 18, grindResultWeightGr: 18.07, motorRunTimeMs: 8300, sessionId: 'secret'}];
+    {grindState: 'Idle', ddValueDum: 819, ddSensorFailed: false, grindTargetWeightGr: 18, grindResultWeightGr: 18.07, grindStartWeightGr: 486.604, motorRunTimeMs: 8300, sessionId: 'secret'}];
   for (const [index, state] of states.entries()) {
     const poll = [...pending.entries()].find(([, timer]) => timer.delay === 100);
     pending.delete(poll[0]); poll[1].callback();
@@ -746,7 +746,7 @@ test('completed grinds become grind events without a uuid', async () => {
   const events = JSON.parse(loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}).body).events;
   assert.equal(events.length, 1);
   assert.deepEqual({...events[0], completedAt: typeof events[0].completedAt},
-    {grindUuid: null, completedAt: 'string', targetWeightGr: 18, resultWeightGr: 18.07, motorRunTimeMs: 8300, overshootWeightGr: null, mode: 'GbW', setting: '82', linkedShotId: null});
+    {grindUuid: null, completedAt: 'string', targetWeightGr: 18, resultWeightGr: 18.07, motorRunTimeMs: 8300, overshootWeightGr: null, mode: 'GbW', portafilterWeightGr: 486.6, setting: '82', linkedShotId: null});
   const diagnostics = JSON.parse((await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query})).body);
   assert.equal(diagnostics.grindEvents.length, 1);
   assert.equal(JSON.stringify(diagnostics).includes('secret'), false);
@@ -1061,7 +1061,7 @@ async function workflowHarness({workflow = {context: {targetYield: 36, extras: {
     fixture.sent.forEach((message, index) => {
       if (answeredIds.has(message.msgId)) return;
       answeredIds.add(message.msgId);
-      answer(fixture, index, message.type === 'RequestNachineInfo' ? {grinderType: 'E64 WS'} : {grindState, ddValueDum: dd, ddSensorFailed: false, grindTargetWeightGr: 18, grindResultWeightGr: 18.1, motorRunTimeMs: 8300});
+      answer(fixture, index, message.type === 'RequestNachineInfo' ? {grinderType: 'E64 WS'} : {grindState, ddValueDum: dd, ddSensorFailed: false, grindTargetWeightGr: 18, grindResultWeightGr: 18.1, grindStartWeightGr: 487.04, motorRunTimeMs: 8300});
     });
   };
   const settle = async () => { for (let i = 0; i < 12; i++) { await new Promise(resolve => setImmediate(resolve)); respond(); } };
@@ -1156,7 +1156,7 @@ test('RecordGrindDose sets the target dose and stores the ground weight and grin
   const grind = annotations.extras['mahlkoenig-e64.reaplugin'].grind;
   assert.deepEqual({...grind, completedAt: typeof grind.completedAt}, {completedAt: 'string', secondsBeforeShot: 9, mode: 'GbW', targetWeightGr: 18, resultWeightGr: 18.1,
     deviationGr: 0.1, overshootWeightGr: null, motorRunTimeMs: 8300, setting: '82', grindUuid: null, grindDurationMs: null, successful: null,
-    trigger: null, portafilterRecognized: null, recipe: null});
+    trigger: null, portafilterRecognized: null, portafilterWeightGr: 487, recipe: null});
 
   shots.s2 = shot('s2', 'other-grinder');
   h.loaded.plugin.onEvent({name: 'shotStored', payload: {id: 's2'}});

@@ -249,18 +249,20 @@ applies only while this grinder is the workflow's grinder:
   the plugin writes the shot's `annotations.actualDoseWeight` as the ground weight
   (rounded to 0.1 g) and `annotations.extras["mahlkoenig-e64.reaplugin"].grind`
   with `completedAt`, `secondsBeforeShot`, `mode`, `targetWeightGr`,
-  `resultWeightGr`, `deviationGr`, `overshootWeightGr`, `motorRunTimeMs`,
-  `setting` and, once the grinder log has been read, `grindUuid`,
+  `resultWeightGr`, `deviationGr`, `overshootWeightGr`, `portafilterWeightGr`,
+  `motorRunTimeMs`, `setting` and, once the grinder log has been read, `grindUuid`,
   `grindDurationMs`, `successful`, `trigger` and `recipe`. A grind the log marks
   as failed is not used.
 - `trigger` is how the grind started, as the grinder logs it: `StartButton`,
   `PortafilterSwitch` or `PortafilterDetection`. `portafilterRecognized` is true
   for `PortafilterDetection` (the grinder recognized the portafilter by its
   weight and chose the recipe linked to it), false for the others, and null when
-  the grinder's log has no trigger column. Which portafilter was recognized
-  (its id and stored weight) is only in the grinder's database, whose download
-  checkpoints and re-permissions the database file, so the plugin does not read
-  it.
+  the grinder's log has no trigger column. `portafilterWeightGr` is the load the
+  grinder weighed before grinding, which is the empty portafilter (rounded to
+  0.1 g; null when the grinder reported none), so it tells your portafilters
+  apart. The grinder's registered portafilter list (id, stored weight and
+  tolerance) is only in its database, whose download checkpoints and
+  re-permissions the database file, so the plugin does not read it.
 - `recipe` is the grinder recipe the grind used: slot `index`, `uuid`, `mode`,
   `type`, `icon`, `amountGr`, `setting` (coarseness in displayed µm), brew time
   and weight, and `gbsEnabled` (Grind-by-Sync). `doseApplied` says whether the
@@ -357,7 +359,7 @@ See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
 
 ## Installation
 
-Version 0.7.5 requires a Decaid build containing the read-only Grinder observation
+Version 0.7.6 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and the plugin `notifications` permission (#1003), and tracks upstream Decaid
 `main` (verified against `1d74fbf7` on 2026-11-23), in addition to runtime-v2 and validated device
 surfaces. `certSha256` pinning needs a host with `tlsPinSha256` support; older hosts ignore it. The stable `0.8.8` release has not been

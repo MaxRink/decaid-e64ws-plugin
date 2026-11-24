@@ -636,6 +636,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     instance.grindEvents.unshift({grindUuid: null, completedAt: new Date().toISOString(), completedAtMs: Date.now(),
       targetWeightGr: finite(data.grindTargetWeightGr), resultWeightGr: finite(data.grindResultWeightGr),
       motorRunTimeMs: finite(data.motorRunTimeMs), overshootWeightGr: finite(data.overshootWeightGr), mode,
+      // The load before grinding is the empty portafilter the grinder weighed.
+      portafilterWeightGr: finite(data.grindStartWeightGr) > 0 ? Math.round(data.grindStartWeightGr * 10) / 10 : null,
       setting: setting === undefined ? null : setting, linkedShotId: null});
     instance.grindEvents.length = Math.min(instance.grindEvents.length, MAX_GRIND_EVENTS);
     queueLogDownload(instance, 0);
@@ -993,6 +995,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       setting: grind.setting, grindUuid: grind.grindUuid, grindDurationMs: log.grindDurationMs === undefined ? null : log.grindDurationMs,
       successful: log.successful === undefined ? null : log.successful,
       trigger, portafilterRecognized: trigger === null ? null : trigger === "PortafilterDetection",
+      portafilterWeightGr: grind.portafilterWeightGr === undefined ? null : grind.portafilterWeightGr,
       recipe: recipe && {...recipe,
         // Whether the grinder applied the recipe: its dose within 0.5 g of the
         // weighed result, its coarseness equal to the displayed setting.
