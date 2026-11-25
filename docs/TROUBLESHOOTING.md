@@ -126,10 +126,9 @@ The staged record is always kept in memory; the verbose level adds the
 underlying error message and code.
 
 * Per request, no restart: `GET <diagnostics>?read=stages&verbose=1`.
-* Persistently: switch on **Verbose connection diagnostics** (`DebugLog`, hidden
-  under advanced settings; Off by default) and reload. It is declared in the
-  manifest, so the host saves it; any value other than `"true"`/`"false"` is
-  refused at load.
+* Persistently: switch on **Verbose connection diagnostics** (`DebugLog`, Off by
+  default) and reload. It is declared in the manifest, so the host can save it;
+  any value other than `"true"`/`"false"` is refused at load.
 
 The quiet level prints stage, outcome, class and timing; the verbose level adds
 `last error: <class> <message> [code: <code>]`. Tokens, Owner passwords, auth
