@@ -6,6 +6,8 @@ For device work, prefer a deterministic mock or recorded, redacted trace so chan
 
 Keep pull requests focused. Include the affected host/plugin version, tests run, and any compatibility or migration impact. Never commit secrets, credentials, private customer data, or unredacted device captures. Decaid and Streamline upstream API changes should be discussed in the linked upstream projects before implementation when practical.
 
+Renaming anything that functions as an identity is a migration, not an edit. The plugin's display name may change; `manifest.json` has no place for comments, so [`docs/NAMING.md`](docs/NAMING.md) is the record that its `id`, the driver ids, the surface endpoints and the setting keys are frozen because the host persists settings and devices under them. Read it before touching any of those strings, and keep [`test/identity.test.mjs`](test/identity.test.mjs) passing.
+
 
 ## Choose where to report
 

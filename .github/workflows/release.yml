@@ -57,4 +57,4 @@ jobs:
           )
           PY
           gh release create "$GITHUB_REF_NAME" dist/*.zip --verify-tag \
-            --title "E64 WS $GITHUB_REF_NAME" --notes-file release-notes.md
+            --title "Mahlkönig WebSocket grinders $GITHUB_REF_NAME" --notes-file release-notes.md

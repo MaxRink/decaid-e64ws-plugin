@@ -1,8 +1,12 @@
-# Mahlkönig E64 Decaid plugin
+# Mahlkönig WebSocket grinders — Decaid plugin
 
 [![CI](https://github.com/MaxRink/decaid-e64ws-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/MaxRink/decaid-e64ws-plugin/actions/workflows/ci.yml)
 
-External `type: grinder` plugin for E64 devices exposing the local WebSocket
+**Tested today:** E64 WS, on a real unit. **Expected, untested:** E64 TS and the
+NG2 GbS models (E65T, E65W, E80T, E80W GbS); every other model in
+[Compatible grinders](#compatible-grinders) is not compatible.
+
+External `type: grinder` plugin for Mahlkönig grinders exposing the local WebSocket
 protocol. It is read-only by default; optional control needs a grinder running
 an owner-enabled development image (see [Grinder control](#grinder-control)). It is based on the closed Decaid #848 implementation and
 uses the current runtime-v2 Grinder contract.
@@ -110,7 +114,7 @@ report the `grinderTypeName` together with the plugin's diagnostics page.
 
 ## Setup
 
-Open **Decaid > Settings > Plugins > Mahlkönig E64 > Set up** (the plugin's
+Open **Decaid > Settings > Plugins > Mahlkönig WebSocket grinders > Set up** (the plugin's
 `setup` page; `ui?view=setup` is an alias for skins). A fresh install, or a
 configuration that no longer validates, loads in a "needs setup" state with a
 Decaid notice instead of failing, so the assistant is always reachable. It walks
