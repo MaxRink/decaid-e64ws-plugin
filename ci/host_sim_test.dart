@@ -296,9 +296,16 @@ void main() {
 
       sim = await E64Sim.start(simRoot!, devGate: 'locked');
       final unpinned = await load(sim.settings(pinned: false));
+      // An unpinned self-signed certificate names the stage it stopped at, the
+      // value it expected and one next step, instead of a catch-all sentence.
       await expectLater(
         unpinned.onConnect(),
-        throwsA(predicate((e) => '$e'.contains('login request failed'))),
+        throwsA(predicate((e) =>
+            '$e'.contains('E64 connection failed at TLS certificate verification') &&
+            '$e'.contains('Expected') &&
+            '$e'.contains('Observed') &&
+            '$e'.contains('Next:'))),
+        reason: 'the failure is classified, not a catch-all',
       );
       await manager.unloadPlugin(manifest.id);
 

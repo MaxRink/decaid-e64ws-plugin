@@ -75,7 +75,8 @@ test('password minting over pinned https and wss', (t) => {
     assert.equal(connection.tokenSource, 'password');
     assert.equal(JSON.stringify(connection).includes('sim-password'), false);
     assert.equal(JSON.stringify(connection).includes(sim.token), false);
-    assert.deepEqual(notices.filter(([, value]) => value !== 'setup'), [['dismiss', 'login-sim']]);
+    // A successful login withdraws its notice, and a successful connect withdraws its own.
+    assert.deepEqual(notices.filter(([, value]) => value !== 'setup'), [['dismiss', 'login-sim'], ['dismiss', 'connect-sim']]);
   });
 });
 
@@ -85,8 +86,13 @@ test('missing or wrong certificate pins fail the login and the wss connection', 
     for (const pin of [undefined, other.sha256]) {
       const extra = pin ? {certSha256: pin} : {};
       const minted = await loadPlugin({InstancesJson: instance(sim, {restPort: sim.httpPort, ...extra}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: password('sim-password')});
-      await assert.rejects(minted.session.connect(), /login request failed/);
-      assert.equal((await minted.session.diagnostics('connection')).body.lastMintError, 'login request failed');
+      // The pin is the expected value, so a failed verification names the stage
+      // and both fingerprints instead of one catch-all sentence.
+      await assert.rejects(minted.session.connect(), /failed at TLS certificate verification/);
+      const refused = (await minted.session.diagnostics('connection')).body;
+      assert.equal(refused.lastMintError, 'login certificate');
+      assert.match(refused.lastMintDiagnosis, /CERTIFICATE_VERIFY_FAILED/);
+      assert.equal(refused.diagnosis.stage, 'certificate');
       await minted.plugin.onUnload();
       const fixed = await loadPlugin({InstancesJson: instance(sim, extra), TokensJson: token(sim.token)});
       await assert.rejects(fixed.session.connect(), /CERTIFICATE_VERIFY_FAILED/);
@@ -399,8 +405,15 @@ test('a full setup-assistant run against the simulator ends connected', (t) => {
     const call = async (plugin, body) => { const r = await plugin.handleHttpRequest({endpoint: 'setup', method: 'POST', query: {}, body}); return JSON.parse(r.body); };
     assert.equal(JSON.parse(fresh.plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}).body).needsSetup, true);
     const target = {host: '127.0.0.1', port: sim.port, restPort: sim.httpPort};
-    // The simulator's certificate is not the E64 fleet certificate: the page asks for the fingerprint (path C).
-    assert.deepEqual(await call(fresh.plugin, {action: 'probe-cert', ...target}), {recognised: false});
+    // The simulator's certificate is not the E64 fleet certificate: the page asks for
+    // the fingerprint (path C) and says which stage failed, not just "not recognised".
+    const unknownCert = await call(fresh.plugin, {action: 'probe-cert', ...target});
+    assert.equal(unknownCert.recognised, false);
+    assert.equal(unknownCert.reason, 'certificate');
+    assert.match(unknownCert.message, /Expected leaf SHA-256 fingerprint/);
+    // The pasted fingerprint can now be verified instead of only being re-parsed.
+    const verified = await call(fresh.plugin, {action: 'probe-cert', ...target, certSha256: cert.sha256});
+    assert.deepEqual([verified.recognised, verified.pinVerified, verified.certSha256], [false, true, cert.sha256.replace(/:/g, '').toLowerCase()]);
     const pin = cert.sha256;
     assert.equal((await call(fresh.plugin, {action: 'test-login', ...target, certSha256: pin, password: 'sim-password'})).result, 'accepted');
     await new Promise((resolve) => setTimeout(resolve, 3100));

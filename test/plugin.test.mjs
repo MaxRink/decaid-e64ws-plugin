@@ -633,7 +633,7 @@ test('certSha256 pins the login fetch and the wss transport only when set', asyn
     await loaded.plugin.onUnload();
   }
   for (const bad of ['abc', 'zz'.repeat(32), 42, hex + '00']) {
-    await assert.rejects(async () => load({InstancesJson: one('127.0.0.1', {certSha256: bad}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}})}, {sent: [], events: []}), /certSha256 must be 64 hex/);
+    await assert.rejects(async () => load({InstancesJson: one('127.0.0.1', {certSha256: bad}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}})}, {sent: [], events: []}), /certSha256 .*(hex characters|not hex|must be text)/);
   }
 });
 
@@ -678,7 +678,9 @@ test('login uses restPort and raises a notice until a login succeeds', async () 
   await new Promise(resolve => setImmediate(resolve));
   answer(fixture, 0, {grindState: 'Idle'});
   await connected;
-  assert.deepEqual(notices.at(-1), ['dismiss', 'login-one']);
+  const dismissed = notices.filter(([kind]) => kind === 'dismiss').map(([, id]) => id);
+  assert.deepEqual(dismissed.includes('login-one'), true, 'the login notice is withdrawn');
+  assert.deepEqual(dismissed.includes('connect-one'), true, 'the connect notice is withdrawn');
   await assert.rejects(async () => load({InstancesJson: one('127.0.0.1', {restPort: 0}), TokensJson: '{}'}, {sent: [], events: []}), /restPort is invalid/);
   await plugin.onUnload();
 });
@@ -1584,17 +1586,21 @@ test('setup probes the certificate and tests the login without storing anything'
   };
   const loaded = await load({}, {sent: [], events: []}, {Date: FakeDate}, fetchImpl);
   const post = async (body) => { const r = await loaded.plugin.handleHttpRequest({endpoint: 'setup', method: 'POST', query: {}, body}); return [r.status, JSON.parse(r.body)]; };
-  assert.deepEqual(await post({action: 'probe-cert', host: '192.168.1.40'}), [200, {recognised: true, certSha256: presented}]);
+  const recognised = await post({action: 'probe-cert', host: '192.168.1.40'});
+  assert.deepEqual([recognised[0], recognised[1].recognised, recognised[1].certSha256], [200, true, presented]);
+  assert.equal(recognised[1].observedFingerprint, presented);
   assert.deepEqual(calls[0].url, 'https://192.168.1.40/rest_api/ping');
   presented = 'ab'.repeat(32);
-  assert.deepEqual(await post({action: 'probe-cert', host: '192.168.1.40', restPort: 8443}), [200, {recognised: false}]);
+  const notRecognised = (await post({action: 'probe-cert', host: '192.168.1.40', restPort: 8443}))[1];
+  assert.equal(notRecognised.recognised, false);
+  assert.equal(notRecognised.reason, 'tls', 'a failed probe says which stage failed');
   const login = (password) => post({action: 'test-login', host: '192.168.1.40', certSha256: presented, password});
   assert.equal((await login('wrong'))[1].result, 'wrong-password');
   assert.deepEqual((await login('right'))[0], 429, 'one attempt every 3 s');
   now += 3000;
   assert.equal((await login('right'))[1].result, 'accepted');
   now += 3000;
-  assert.equal((await post({action: 'test-login', host: '192.168.1.40', certSha256: 'cd'.repeat(32), password: 'right'}))[1].result, 'unreachable');
+  assert.equal((await post({action: 'test-login', host: '192.168.1.40', certSha256: 'cd'.repeat(32), password: 'right'}))[1].result, 'tls', 'a transport failure names its stage');
   assert.equal(JSON.stringify(calls.map((call) => call.init.body)).includes('right') && JSON.stringify(loaded.plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}).body).includes('right'), false);
   await loaded.plugin.onUnload();
 });
@@ -1775,4 +1781,356 @@ test('plugin-level diagnostics without a deviceId default to one instance or off
   assert.ok(none.body.includes('No grinder is set up yet.') && none.body.includes('href="setup?"'));
   assert.equal((await get(empty.plugin, {})).status, 404);
   await empty.plugin.onUnload();
+});
+
+// --- Issue #16: staged connection diagnosis -------------------------------
+const PIN = '91:B4:12:EE:01:4F:21:C3:BB:24:45:43:0B:6A:3D:77:90:33:34:A1:30:0A:D8:4F:19:80:AB:2C:5F:53:62:0B';
+const PIN_HEX = PIN.replace(/:/g, '').toLowerCase();
+
+test('every connect stage names what failed, what was expected and one next step', async () => {
+  const cases = [
+    ['dns', () => Object.assign(new Error('getaddrinfo ENOTFOUND e64.local'), {code: 'ENOTFOUND'}), /failed at DNS lookup/, /Expected.*resolve/],
+    ['refused', () => new Error('request to https://127.0.0.1/rest_api/login failed: connect ECONNREFUSED 127.0.0.1:443'), /failed at TCP connect \(connection refused\)/, /Expected.*listen/],
+    ['timeout', () => Object.assign(new Error('connect ETIMEDOUT 127.0.0.1:443'), {code: 'ETIMEDOUT'}), /failed at TCP connect \(timeout\)/, /Next:/],
+    ['tls', () => new Error('HandshakeException: Connection terminated during handshake'), /failed at TLS handshake/, /Next:/],
+    ['certificate', () => new Error('HandshakeException: CERTIFICATE_VERIFY_FAILED: self signed certificate'), /failed at TLS certificate verification/, /Expected leaf SHA-256 fingerprint/],
+  ];
+  for (const [stage, makeError, pattern, extra] of cases) {
+    const fixture = {sent: [], events: []};
+    const loaded = await load({
+      InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0, certSha256: PIN}]),
+      TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})
+    }, fixture, {}, async () => { throw makeError(); });
+    let message = '';
+    await assert.rejects(async () => loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+      message = error.message;
+      return true;
+    });
+    assert.match(message, pattern, stage);
+    assert.match(message, extra, stage + ' states the expectation');
+    assert.match(message, /Next: /, stage + ' offers one next step');
+    assert.match(message, /code: (ENOTFOUND|ETIMEDOUT|none)/, stage + ' keeps the underlying code');
+    const response = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'connection'}});
+    const body = JSON.parse(response.body);
+    assert.equal(body.diagnosis.stage, stage, stage + ' is classified on the diagnostics read');
+    assert.equal(body.lastMintError.startsWith('login '), true, 'the category prefix is kept');
+    await loaded.plugin.onUnload();
+  }
+});
+
+test('a certificate pin mismatch shows the expected fingerprint against what was observed', async () => {
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0, certSha256: PIN}]),
+    TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})
+  }, fixture, {}, async () => { throw new Error('tlsPinSha256 does not match the certificate the peer presented'); });
+  await assert.rejects(async () => loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    assert.match(error.message, /failed at certificate pin/);
+    assert.ok(error.message.includes(PIN), 'the expected pin is shown in the comparable colon form');
+    assert.match(error.message, /Observed: .*(does not match|not the pinned)/);
+    assert.match(error.message, /openssl s_client -connect 127\.0\.0\.1:443/);
+    return true;
+  });
+  const response = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'diagnostics'}});
+  const bundle = JSON.parse(response.body);
+  assert.equal(bundle.error.class, 'fingerprint');
+  assert.equal(bundle.tls.expectedFingerprint, PIN);
+  assert.equal(typeof bundle.tls.observedFingerprint === 'string' || bundle.tls.observedFingerprint === null, true);
+  await loaded.plugin.onUnload();
+});
+
+test('an upgrade rejection names the HTTP status and the token, and a login rejection names Retry-After', async () => {
+  const fixture = {sent: [], events: []};
+  const loaded = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 'secret-token'}})}, fixture);
+  const failing = {...transport(fixture), open: async () => { throw new Error("WebSocketException: Connection to 'http://127.0.0.1:9997/?token=secret-token#' was not upgraded to websocket, HTTP status code: 401"); }};
+  await assert.rejects(async () => loaded.registrations[0].handlers.connect({transport: failing, publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    assert.match(error.message, /failed at WebSocket upgrade/);
+    assert.match(error.message, /HTTP status 401/);
+    assert.match(error.message, /Next: .*token/i);
+    assert.equal(error.message.includes('secret-token'), false);
+    return true;
+  });
+  await loaded.plugin.onUnload();
+
+  const fixture2 = {sent: [], events: []};
+  const loaded2 = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})}, fixture2, {}, async () => ({ok: false, status: 429, headers: {get: (name) => name.toLowerCase() === 'retry-after' ? '30' : null}, text: async () => ''}));
+  await assert.rejects(async () => loaded2.registrations[0].handlers.connect({transport: transport(fixture2), publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    assert.match(error.message, /login HTTP 429/);
+    assert.match(error.message, /Retry-After: 30 s/);
+    return true;
+  });
+  await loaded2.plugin.onUnload();
+});
+
+test('the diagnostics bundle is complete and contains no token, password, auth header or certificate body', async () => {
+  const token = 'tok-3f9a1c-sekrit', password = 'hunter2-password';
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0, certSha256: PIN}]),
+    TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password}})
+  }, fixture, {}, async () => ({ok: true, status: 200, headers: {get: () => `Bearer ${token}`}, text: async () => ''}));
+  const leaking = {...transport(fixture), open: async () => { throw new Error(`upgrade failed: Authorization: Bearer ${token} for wss://127.0.0.1:9997/?token=${token} password=${password} -----BEGIN CERTIFICATE-----MIIBszCCAVmgAwIBAgIU-----END CERTIFICATE-----`); }};
+  await assert.rejects(async () => loaded.registrations[0].handlers.connect({transport: leaking, publish: async () => {}, reportDisconnected: async () => {}}));
+  const response = await loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read: 'diagnostics'}});
+  assert.equal(response.status, 200);
+  const text = response.body;
+  const bundle = JSON.parse(text);
+  for (const secret of [token, password]) assert.equal(text.includes(secret), false, 'no secret is bundled');
+  assert.equal(/authorization/i.test(text), false, 'no auth header is bundled');
+  assert.equal(/begin certificate/i.test(text), false, 'no certificate body is bundled');
+  assert.equal(/bearer\s+[A-Za-z0-9]/i.test(text), false, 'no bearer value is bundled');
+  assert.equal(bundle.plugin.version, JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8')).version, 'the bundle reports the manifest version');
+  assert.equal(typeof bundle.platform, 'string');
+  assert.equal(bundle.instance.host, '127.0.0.1');
+  assert.equal(bundle.tls.pinned, true);
+  assert.equal(bundle.tls.expectedFingerprint, PIN);
+  assert.match(bundle.tls.comparison, /SHA-256 of the leaf certificate DER/i);
+  assert.ok(bundle.stages.length >= 2, 'the staged steps are bundled');
+  assert.equal(bundle.stages.every((step) => typeof step.stage === 'string' && typeof step.at === 'string' && typeof step.ok === 'boolean'), true);
+  assert.equal(bundle.stages.some((step) => Number.isFinite(step.ms)), true, 'the steps carry timings');
+  assert.equal(typeof bundle.error.class, 'string');
+  assert.equal(typeof bundle.error.code === 'string' || bundle.error.code === null, true);
+  await loaded.plugin.onUnload();
+});
+
+test('staged progress is logged with the error code only when the user turns the level on', async () => {
+  const read = async (plugin, query) => JSON.parse((await plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', ...query}})).body);
+  const quiet = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})}, {sent: [], events: []}, {}, async () => { throw Object.assign(new Error('getaddrinfo ENOTFOUND nope.local'), {code: 'ENOTFOUND'}); });
+  await assert.rejects(async () => quiet.registrations[0].handlers.connect({transport: transport({sent: [], events: []}), publish: async () => {}, reportDisconnected: async () => {}}));
+  const quietLog = await read(quiet.plugin, {read: 'stages'});
+  assert.equal(quietLog.verbose, false);
+  assert.equal(quietLog.lines.some((line) => /ENOTFOUND/.test(line)), false, 'the quiet level carries no error text');
+  assert.equal(quietLog.lines.length >= 1, true);
+  const verboseLog = await read(quiet.plugin, {read: 'stages', verbose: '1'});
+  assert.equal(verboseLog.verbose, true);
+  assert.equal(verboseLog.lines.some((line) => /ENOTFOUND/.test(line)), true, 'the verbose level keeps the underlying code');
+  assert.equal(verboseLog.lines.some((line) => /getaddrinfo/.test(line)), true, 'the verbose level keeps the underlying message');
+  await quiet.plugin.onUnload();
+
+  const loud = await load({InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0}]), TokensJson: '{}', MintTokens: 'true', DebugLog: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})}, {sent: [], events: []}, {}, async () => { throw new Error('connect ECONNREFUSED 127.0.0.1:443'); });
+  await assert.rejects(async () => loud.registrations[0].handlers.connect({transport: transport({sent: [], events: []}), publish: async () => {}, reportDisconnected: async () => {}}));
+  const loudLog = await read(loud.plugin, {read: 'stages'});
+  assert.equal(loudLog.verbose, true, 'DebugLog turns the verbose level on without a query');
+  assert.equal(loudLog.lines.some((line) => /ECONNREFUSED/.test(line)), true);
+  assert.equal(loudLog.lines.some((line) => /pw/.test(line)), false, 'the password never reaches the log');
+  await loud.plugin.onUnload();
+});
+
+test('the certificate probe never claims a fingerprint the host did not verify', async () => {
+  const post = (plugin, body) => plugin.handleHttpRequest({endpoint: 'setup', method: 'POST', query: {}, body}).then((r) => [r.status, JSON.parse(r.body)]);
+  class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [0])); } static now() { return 0; } }
+
+  // A host that honours tlsPinSha256: the fleet pin only succeeds for the fleet certificate.
+  const honours = async (_url, init) => { if (init.tlsPinSha256 !== PIN_HEX) throw new Error('HandshakeException: CERTIFICATE_VERIFY_FAILED'); return {ok: true, status: 200, headers: {get: () => null}, text: async () => ''}; };
+  const strict = await load({}, {sent: [], events: []}, {Date: FakeDate}, honours);
+  const strictFirst = (await post(strict.plugin, {action: 'probe-cert', host: '192.168.1.40'}))[1];
+  assert.deepEqual([strictFirst.recognised, strictFirst.certSha256], [true, PIN_HEX]);
+  const pinned = (await post(strict.plugin, {action: 'probe-cert', host: '192.168.1.40', certSha256: 'ab'.repeat(32)}))[1];
+  assert.deepEqual([pinned.recognised, pinned.certSha256], [true, PIN_HEX], 'the host proves the fleet certificate');
+  await strict.plugin.onUnload();
+
+  // A host that ignores tlsPinSha256 accepts any certificate, so it cannot vouch for the fleet one.
+  const ignores = async () => ({ok: true, status: 200, headers: {get: () => null}, text: async () => ''});
+  const loose = await load({}, {sent: [], events: []}, {Date: FakeDate}, ignores);
+  const ignored = (await post(loose.plugin, {action: 'probe-cert', host: '192.168.1.40'}))[1];
+  assert.equal(ignored.recognised, false, 'an unenforced pin proves nothing about the certificate');
+  assert.equal(ignored.reason, 'pin-unsupported');
+  assert.match(ignored.message, /does not enforce certSha256|ignores tlsPinSha256/i);
+  await loose.plugin.onUnload();
+
+  // An unreachable grinder is reported as such, not as "certificate not recognised".
+  const down = async () => { throw new Error('connect ECONNREFUSED 192.168.1.40:443'); };
+  const offline = await load({}, {sent: [], events: []}, {Date: FakeDate}, down);
+  const refused = (await post(offline.plugin, {action: 'probe-cert', host: '192.168.1.40'}))[1];
+  assert.deepEqual([refused.recognised, refused.reason], [false, 'refused']);
+  assert.match(refused.message, /192\.168\.1\.40:443/, 'the message names the port that refused');
+  await offline.plugin.onUnload();
+});
+
+test('a login test names the failing stage, the status code and never echoes the password', async () => {
+  class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [1_000_000])); } static now() { return 1_000_000; } }
+  const post = (plugin, body) => plugin.handleHttpRequest({endpoint: 'setup', method: 'POST', query: {}, body}).then((r) => JSON.parse(r.body));
+  const password = 'owner-secret-password';
+  const cases = [
+    [() => { throw new Error('HandshakeException: CERTIFICATE_VERIFY_FAILED: self signed certificate'); }, 'certificate'],
+    [() => { throw new Error('connect ECONNREFUSED 192.168.1.40:443'); }, 'refused'],
+    [() => ({ok: false, status: 401, headers: {get: () => null}, text: async () => ''}), 'auth'],
+    [() => ({ok: true, status: 200, headers: {get: () => null}, text: async () => ''}), 'no-bearer'],
+  ];
+  for (const [impl, expected] of cases) {
+    const loaded = await load({}, {sent: [], events: []}, {Date: FakeDate}, async () => impl());
+    const result = await post(loaded.plugin, {action: 'test-login', host: '192.168.1.40', certSha256: PIN_HEX, password});
+    assert.equal(result.reason, expected, expected);
+    if (expected === 'auth') assert.equal(result.result, 'wrong-password');
+    assert.equal(JSON.stringify(result).includes(password), false, 'the password is never echoed');
+    assert.equal(typeof result.message, 'string');
+    assert.match(result.message, /Next: /, expected + ' offers a next step');
+    if (expected === 'auth') assert.equal(result.status, 401);
+    await loaded.plugin.onUnload();
+  }
+});
+
+test('the setup assistant validates every field separately', async () => {
+  const loaded = await load({}, {sent: [], events: []});
+  const validate = async (body) => {
+    const response = await loaded.plugin.handleHttpRequest({endpoint: 'setup', method: 'POST', query: {}, body: {action: 'validate', ...body}});
+    return [response.status, JSON.parse(response.body)];
+  };
+  const [status, body] = await validate({host: '8.8.8.8', port: 0, restPort: 70000, name: 'x'.repeat(200), certSha256: 'abc'});
+  assert.equal(status, 200);
+  assert.deepEqual(Object.keys(body.fields).sort(), ['certSha256', 'host', 'name', 'port', 'restPort']);
+  assert.match(body.fields.host, /loopback|private|local network/);
+  assert.match(body.fields.port, /9997|1 and 65535/);
+  assert.match(body.fields.restPort, /443|1 and 65535/);
+  assert.match(body.fields.name, /128/);
+  assert.match(body.fields.certSha256, /64 hex/);
+  assert.deepEqual((await validate({host: '192.168.1.40', port: 9997, restPort: 443, name: 'E64', certSha256: PIN}))[1], {fields: {}});
+  await loaded.plugin.onUnload();
+});
+
+test('certSha256 accepts the openssl line and explains a SHA-1 or short value instead of a generic rejection', async () => {
+  const forward = async (certSha256) => {
+    let init = null;
+    const fixture = {sent: [], events: []};
+    const loaded = await load({InstancesJson: one('192.168.200.103', {certSha256}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '192.168.200.103', password: 'pw'}})}, fixture, {}, async (_url, value) => { init = value; return {ok: true, status: 200, headers: {get: () => 'Bearer minted'}, text: async () => ''}; });
+    const connected = loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}});
+    await new Promise((resolve) => setImmediate(resolve));
+    answer(fixture, 0, {grindState: 'Idle'});
+    await connected;
+    await loaded.plugin.onUnload();
+    return init.tlsPinSha256;
+  };
+  assert.equal(await forward('sha256 Fingerprint=' + PIN), PIN_HEX);
+  assert.equal(await forward(PIN.toLowerCase()), PIN_HEX);
+  assert.equal(await forward('  ' + PIN.replace(/:/g, ' ') + '  '), PIN_HEX);
+  for (const [value, pattern] of [
+    ['SHA1 Fingerprint=91B412EE014F21C3BB2445430B6A3D77903334A1', /SHA-256, not SHA-1/],
+    ['91B412EE014F21C3BB2445430B6A3D77903334A1', /40 hex characters/],
+    [PIN + '0B', /66 hex characters/],
+    ['not-a-fingerprint', /not hex/],
+  ]) {
+    await assert.rejects(async () => load({InstancesJson: one('127.0.0.1', {certSha256: value}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}})}, {sent: [], events: []}), pattern);
+  }
+});
+
+// --- PR #19 review: the redaction guarantee has to survive hostile shapes ----
+function pluginWithNotices(devices, notices, fetchImpl) {
+  const host = {notify: (value) => { notices.push(value); return 'request'; }, dismissNotification: () => {},
+    devices: {register(definition, handlers) { devices.push({definition, handlers});
+      return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:e64:${definition.instanceId}`}); }}};
+  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent, btoa: globalThis.btoa,
+    ...(fetchImpl ? {fetch: fetchImpl} : {})};
+  vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
+  return sandbox.createPlugin(host);
+}
+
+test('redaction survives an upper-cased token, a 3-character password, a bare credential and a truncated PEM block', async () => {
+  const token = 'tok-3f9a1c-sekrit', password = 'Q7z';
+  const devices = [], notices = [];
+  const plugin = pluginWithNotices(devices, notices);
+  // A static token plus a stored password: both are configured secrets for this instance.
+  await plugin.onLoad({InstancesJson: one('127.0.0.1', {certSha256: PIN}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token}}),
+    MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password}}), PopulateGrinderRecord: 'false'});
+  // Everything a host or a device can do to the text, in one error: upper-case the
+  // token, echo a 3-character password, show a bare credential and truncate a PEM block.
+  const hostile = 'upgrade failed for ' + token.toUpperCase() + ' and ' + password +
+    ' with Basic dXNlcjpwYXNz and -----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU';
+  let thrown = '';
+  const failing = {...transport({sent: [], events: []}), open: async () => { throw new Error(hostile); }};
+  await assert.rejects(async () => devices[0].handlers.connect({transport: failing, publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    thrown = error.message;
+    return true;
+  });
+  const read = async (query) => (await plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET',
+    query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', ...query}})).body;
+  const surfaces = {
+    'thrown error': thrown,
+    notification: notices.map((notice) => notice.message || '').join('\n'),
+    'read=diagnostics': await read({read: 'diagnostics'}),
+    'read=stages verbose': await read({read: 'stages', verbose: '1'}),
+    'read=connection': await read({read: 'connection'}),
+    'diagnostics page': await read({ui: '1'}),
+  };
+  for (const [name, text] of Object.entries(surfaces)) {
+    assert.equal(text.toUpperCase().includes(token.toUpperCase()), false, name + ' has no token, whatever its case');
+    assert.equal(text.includes(password), false, name + ' has no short password');
+    assert.equal(text.includes('dXNlcjpwYXNz'), false, name + ' has no bare Basic credential');
+    assert.equal(/BEGIN CERTIFICATE|MIIBszCCAVmg/.test(text), false, name + ' has no certificate body');
+    assert.equal(/basic\s+[A-Za-z0-9+/=]{8,}/i.test(text), false, name + ' has no unredacted scheme value');
+    assert.match(text, /\[redacted\]/, name + ' shows the redaction');
+  }
+  await plugin.onUnload();
+});
+
+test('a 100 kB device error cannot inflate the message, the notification or the bundle', async () => {
+  const huge = 'x'.repeat(100 * 1000) + ' END';
+  const devices = [], notices = [];
+  const plugin = pluginWithNotices(devices, notices);
+  await plugin.onLoad({InstancesJson: one('127.0.0.1'), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 'static'}}), PopulateGrinderRecord: 'false'});
+  let thrown = '';
+  const failing = {...transport({sent: [], events: []}), open: async () => { throw new Error(huge); }};
+  await assert.rejects(async () => devices[0].handlers.connect({transport: failing, publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    thrown = error.message;
+    return true;
+  });
+  assert.ok(thrown.length <= 1200, 'the thrown message is bounded, got ' + thrown.length);
+  const longest = Math.max(...notices.map((notice) => (notice.message || '').length));
+  assert.ok(longest <= 1250, 'a notification is bounded, got ' + longest);
+  const body = async (read) => (await plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET',
+    query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read}})).body;
+  const bundle = await body('diagnostics');
+  assert.ok(bundle.length < 6000, 'the bundle is bounded, got ' + bundle.length);
+  const connection = await body('connection');
+  assert.ok(connection.length < 6000, 'the connection read is bounded, got ' + connection.length);
+  await plugin.onUnload();
+
+  // The login path is bounded too, not only the websocket path.
+  const loginDevices = [], loginNotices = [];
+  const loginPlugin = pluginWithNotices(loginDevices, loginNotices, async () => { throw new Error(huge); });
+  await loginPlugin.onLoad({InstancesJson: one('127.0.0.1'), TokensJson: '{}', MintTokens: 'true', PopulateGrinderRecord: 'false',
+    PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})});
+  let loginThrown = '';
+  await assert.rejects(async () => loginDevices[0].handlers.connect({transport: transport({sent: [], events: []}), publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    loginThrown = error.message;
+    return true;
+  });
+  assert.ok(loginThrown.length <= 1200, 'the thrown login message is bounded, got ' + loginThrown.length);
+  const longestLogin = Math.max(...loginNotices.map((notice) => (notice.message || '').length));
+  assert.ok(longestLogin <= 1250, 'the login notification is bounded, got ' + longestLogin);
+  await loginPlugin.onUnload();
+});
+
+test('the manifest declares every setting the code reads, with the typing the host stores', () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const read = [...new Set([...source.matchAll(/jsonSetting\(settings, "([A-Za-z][A-Za-z0-9]*)"/g)].map((match) => match[1]))];
+  assert.ok(read.length >= 10, 'the sweep found the settings the code reads');
+  assert.ok(read.includes('DebugLog'), 'the code reads DebugLog');
+  // No exemptions: a key the code reads and the manifest does not declare is a
+  // setting the host refuses to save and drops on load.
+  for (const key of read) {
+    assert.ok(manifest.settings[key], key + ' is declared in the manifest, so the host can save it');
+    assert.equal(typeof manifest.settings[key].type, 'string', key + ' declares the type the host validates');
+  }
+  // secure-versus-plain typing: credentials are stored as secure settings, a log
+  // switch is not one. Display hints are deliberately not asserted.
+  for (const key of ['TokensJson', 'PasswordsJson', 'ApiTokensJson']) assert.equal(manifest.settings[key].secure, true, key + ' is a secure setting');
+  const debugLog = manifest.settings.DebugLog;
+  assert.equal(debugLog.type, 'enum', 'jsonSetting parses JSON text, so the switch is an enum of strings');
+  assert.deepEqual(debugLog.values, ['false', 'true']);
+  assert.equal(debugLog.default, 'false', 'verbose diagnostics stay off unless the user turns them on');
+  assert.equal(debugLog.secure, undefined, 'a diagnostics switch is not a secret');
+});
+
+test('a certificate failure says verification failed instead of claiming it never ran', async () => {
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0, certSha256: PIN}]),
+    TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})
+  }, fixture, {}, async () => { throw new Error('HandshakeException: CERTIFICATE_VERIFY_FAILED: self signed certificate'); });
+  await assert.rejects(async () => loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    assert.match(error.message, /verification of the grinder's certificate failed/);
+    assert.equal(/did not verify/.test(error.message), false, 'verification ran and failed');
+    return true;
+  });
+  await loaded.plugin.onUnload();
 });

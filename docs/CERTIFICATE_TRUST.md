@@ -16,9 +16,13 @@ Android's CA store or Windows' Trusted Root store.
 ## Recommended: pin the certificate per instance
 
 Set `certSha256` on the instance in `InstancesJson`. The plugin passes it as
-`tlsPinSha256` to the login request and the `wss` connection, and the Decaid
-host accepts the connection only when the SHA-256 of the leaf certificate
-(DER) matches. Nothing is added to any trust store.
+`tlsPinSha256` to the login request and the `wss` connection. A host that
+implements `tlsPinSha256` then accepts the connection only when the SHA-256 of
+the leaf certificate (DER) matches; a host that does not implement it (including
+the Decaid builds inspected for this change, whose plugin fetch forwards only
+`url`, `method`, `headers` and `body`) drops the option and falls back to
+platform validation. Nothing is added to any trust store, and the setup
+assistant reports which of the two you have.
 
 Read the fingerprint from the grinder on your own network:
 
@@ -27,8 +31,11 @@ openssl s_client -connect <grinder-ip>:443 </dev/null 2>/dev/null \
   | openssl x509 -noout -fingerprint -sha256
 ```
 
-Use the value after `sha256 Fingerprint=`. Colons are allowed and case does not
-matter. Port 9997 serves the same certificate. Example only; use the value from
+Use the value after `sha256 Fingerprint=`. Colons, spaces and hyphens between
+the bytes are allowed and case does not matter; a `-sha1` value is rejected
+with a message saying so, because only a SHA-256 can match. Anything that is not
+64 hex characters is refused with the reason instead of being repaired. Port
+9997 serves the same certificate. Example only; use the value from
 your own grinder:
 
 ```json
@@ -47,7 +54,11 @@ or `.local` addresses, and secure entries are bound to that host.
 
 A Decaid host without pinning support ignores `tlsPinSha256` and falls back to
 platform validation, which fails for the self-signed certificate. Use one of
-the options below there.
+the options below there. The setup assistant proves which case you are in: it
+probes with a pin that cannot match any certificate, so a host that accepts the
+probe is reported as `pin-unsupported` instead of naming a fingerprint it never
+verified. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for the stage-by-stage
+messages.
 
 ## Alternatives on an owner-controlled LAN
 
