@@ -98,6 +98,22 @@
         "false": "Off"
       }
     },
+    "DebugLog": {
+      "type": "enum",
+      "values": [
+        "false",
+        "true"
+      ],
+      "label": "Verbose connection diagnostics",
+      "description": "Keep the underlying error message and code of every connect stage in the staged diagnostics log (read=stages) and the diagnostics bundle (read=diagnostics), instead of the stage, class and timing only. Secrets stay redacted at both levels. Default false.",
+      "default": "false",
+      "valueLabels": {
+        "true": "On",
+        "false": "Off"
+      },
+      "hidden": true,
+      "advanced": true
+    },
     "PasswordsJson": {
       "type": "string",
       "label": "E64 Owner passwords",

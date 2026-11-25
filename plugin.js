@@ -226,8 +226,12 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // what was expected and what to do next. Nothing here may echo a token, a
   // password, an auth header or a certificate body.
   const PLUGIN_VERSION = "0.7.6"; // Keep in step with manifest.json; a test enforces it.
-  const DIAG_STEPS_MAX = 24, DIAG_TEXT_MAX = 600, CERT_PROBE_MS = 4000;
-  const PIN_COMPARISON = "SHA-256 of the leaf certificate DER, lowercase hex, colons ignored";
+  const DIAG_STEPS_MAX = 24, DIAG_TEXT_MAX = 600, DIAG_MESSAGE_MAX = 1200, CERT_PROBE_MS = 4000;
+  // What the plugin sends and what a host that implements the option compares.
+  // This host build drops unknown fetch options (plugin_manager._performFetch
+  // forwards only url, method, headers and body), so the pin is a request to the
+  // host, not a guarantee: the setup probe proves whether it takes effect.
+  const PIN_COMPARISON = "certSha256 is sent as tlsPinSha256; a host that enforces pinning compares it with the SHA-256 of the leaf certificate DER (lowercase hex, colons ignored)";
   // No certificate can hash to this, so a host that accepts it does not enforce the pin.
   const UNMATCHABLE_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000";
   // One vocabulary for the notification, the diagnostics bundle and the docs.
@@ -259,20 +263,36 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     if (hex.length !== 64) return {ok: false, reason: "is " + hex.length + " hex characters after removing colons, spaces and hyphens; the pin needs 64 hex characters"};
     return {ok: true, hex, grouped: fingerprintGroups(hex)};
   }
-  // Everything a diagnostics surface may print passes through here: configured
-  // secrets by value, then auth material and certificate bodies by shape.
+  function escapeRegExp(value) {
+    return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  // Everything a diagnostics surface may print passes through here. The
+  // guarantee is "no token, no password, no auth material, no certificate body",
+  // so every rule has to survive what a host or a device can do to the text:
+  // upper-case a token, hand back a 3-character password, show a bare "Basic
+  // <base64>", truncate a PEM block, or be 100 kB long.
   function redactForReport(value, secrets, cap) {
     let text = String(value === undefined || value === null ? "" : value);
+    // 1. Configured secrets by value: case-insensitive and at any length.
     for (const secret of secrets || []) {
-      if (typeof secret === "string" && secret.length >= 4) text = text.split(secret).join("[redacted]");
+      if (typeof secret !== "string" || secret === "") continue;
+      text = text.replace(new RegExp(escapeRegExp(secret), "gi"), "[redacted]");
     }
     text = text
-      .replace(/-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g, "[certificate body redacted]")
-      .replace(/([?&](?:token|api[_-]?key|password|secret|auth))=[^\s&#'"]*/gi, "$1=[redacted]")
+      // 2. A certificate body: to its END line, or to the end of a truncated block.
+      .replace(/-----BEGIN [A-Z0-9 ]*-----[\s\S]*?-----END [A-Z0-9 ]*-----/gi, "[certificate body redacted]")
+      .replace(/-----BEGIN [A-Z0-9 ]*-----[\s\S]*$/gi, "[certificate body redacted]")
+      // 3. A query or form value that carries a credential.
+      .replace(/([?&](?:token|api[_-]?key|password|passwd|secret|auth|session|phpsessid))=[^\s&#'"]*/gi, "$1=[redacted]")
+      // 4. A whole header line, whatever its name case.
       .replace(/\b(authorization|proxy-authorization|www-authenticate|x-e64-local-token|set-cookie|cookie|phpsessid)\b\s*:\s*[^\r\n]+/gi, "[auth header redacted]")
-      .replace(/\b(bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]")
-      .replace(/\b(password|passwd|pwd|secret|token)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1$2[redacted]");
-    return cap === undefined ? text.slice(0, DIAG_TEXT_MAX) : text.slice(0, cap);
+      // 5. A bare credential: an auth scheme and its value, with or without a
+      //    header name in front of it, plus the session cookie either way.
+      .replace(/\b(basic|bearer|digest|negotiate|apikey|api-key)\s+([A-Za-z0-9+/=._~-]{8,})/gi, "$1 [redacted]")
+      .replace(/\bphpsessid=[^;\s,]+/gi, "phpsessid=[redacted]")
+      // 6. key=value, key: value and "key": "value".
+      .replace(/\b(password|passwd|pwd|secret|token|api[_-]?key)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1$2[redacted]");
+    return text.slice(0, cap === undefined ? DIAG_TEXT_MAX : cap);
   }
   // A classify result is the whole story of one failed stage: a fixed class, the
   // expected value, what was actually observed and one next step.
@@ -287,7 +307,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       .map((pattern) => pattern.exec(haystack)).filter(Boolean).sort((a, b) => a.index - b.index)[0];
     const base = {message, code, status: statusMatch ? Number(statusMatch[1]) : null, retryAfterMs: null};
     const result = (stage, expected, observed, next) => ({...base, stage, class: stage, expected, observed, next});
-    const detail = message || "the host reported no message";
+    const detail = (message || "the host reported no message").slice(0, DIAG_TEXT_MAX);
     if (has("eai_again", "enotfound", "getaddrinfo", "name or service not known", "nodename nor servname", "failed host lookup", "no address associated", "temporary failure in name resolution")) {
       return result("dns", (config && typeof config.host === "string" ? config.host : "the grinder's address") + " to resolve on this network",
         "the name lookup failed (" + detail + ")",
@@ -315,7 +335,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     }
     if (has("certificate_verify_failed", "certificate verify failed", "self signed", "self-signed", "unable to verify", "certificate has expired", "hostname mismatch", "unknown ca", "bad certificate", "cert_")) {
       return result("certificate", expectedPin(config),
-        "the host did not verify the grinder's certificate (" + detail + ")",
+        "verification of the grinder's certificate failed (" + detail + ")",
         "run " + fingerprintCommand(config) + " and pin that value in certSha256; a host without tlsPinSha256 support ignores the pin and falls back to platform validation");
     }
     if (has("handshakeexception", "handshake failed", "handshake error", "tls alert", "ssl_error", "sslexception", "wrong version number", "protocol version", "certificate required")) {
@@ -385,7 +405,11 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
         observedFingerprint: instance.diag.observedFingerprint ? fingerprintGroups(instance.diag.observedFingerprint) : null,
         observedSource: instance.diag.observedFingerprint ? "confirmed by an enforced tlsPinSha256 probe" : "not exposed by the host transport; run the openssl command in docs/TROUBLESHOOTING.md",
         comparison: PIN_COMPARISON, hostPinSupport: instance.diag.hostPinSupport || "unknown",
-        certificateBody: "never included"},
+        // "unknown" until the setup probe or a classified failure proves one way
+        // or the other; the plugin cannot inspect the host's trust decision.
+        enforcedByHost: instance.diag.hostPinSupport === "honoured" ? "enforced"
+          : instance.diag.hostPinSupport === "ignored" ? "not enforced" : "unknown (this host build may drop tlsPinSha256)",
+        certificateBody: "redacted, never included"},
       fingerprintCommand: fingerprintCommand(config),
       stages: instance.diag.steps.slice(),
       error: failure ? {class: failure.stage, code: failure.code || null, status: failure.status || null,
@@ -417,13 +441,14 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       : "a certificate this host trusts, or the grinder's SHA-256 fingerprint in certSha256 (none is pinned)";
   }
   function failureSentence(failure, secrets, cap) {
-    return "Expected " + failure.expected + ". " +
-      "Observed: " + redactForReport(failure.observed, secrets, cap) + "." +
+    const sentence = "Expected " + failure.expected + ". " +
+      "Observed: " + redactForReport(failure.observed, secrets, DIAG_TEXT_MAX) + "." +
       (failure.status ? " HTTP status " + failure.status + "." : "") +
       (failure.retryAfterMs ? " Retry-After: " + Math.round(failure.retryAfterMs / 1000) + " s." : "") +
       " Next: " + failure.next + " [code: " + (failure.code || "none") + "]";
+    return sentence.slice(0, cap === undefined ? DIAG_MESSAGE_MAX : cap);
   }
-  function loginDiagnosis(failure, secrets, cap) {
+  function loginDiagnosis(failure, secrets, cap = DIAG_MESSAGE_MAX) {
     const category = failure.status ? "login HTTP " + failure.status : "login " + failure.stage;
     const lead = failure.status ? "The login request reached the grinder and was answered HTTP " + failure.status + "."
       : failure.stage === "backoff" ? "The login request was not sent: the previous failure is still being backed off."
@@ -1575,8 +1600,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   function connectDiagnosis(instance, error) {
     const secrets = instanceSecrets(instance), failure = error && error.failure ? error.failure : classifyFailure(error, "open", instance.config);
     const head = "E64 connection failed at " + STAGE_LABEL[failure.stage] + ". ";
-    if (error && error.failure) return {failure, message: head + redactForReport(error.message, secrets, Infinity)};
-    return {failure, message: head + failureSentence(failure, secrets, Infinity)};
+    const body = error && error.failure ? redactForReport(error.message, secrets, DIAG_MESSAGE_MAX) : failureSentence(failure, secrets, DIAG_MESSAGE_MAX);
+    return {failure, message: (head + body).slice(0, DIAG_MESSAGE_MAX)};
   }
   // The connect failure is a current condition, so it is visible in Decaid
   // instead of only in whatever the host does with a rejected handler.

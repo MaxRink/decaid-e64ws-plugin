@@ -35,7 +35,7 @@ reports it as `diagnosis.stage`, and `?read=stages` logs every step.
 | `unreachable` | `Expected a route from this device to the grinder` | This device has no route to that network. | Join the same network/VPN. A wrong subnet looks like this. |
 | `timeout` | `Expected an answer from <host>:<port> within the connect timeout` | Nothing answered. | Wake the grinder, check its power and the access point, then check for a firewall that drops rather than refuses. |
 | `tls` | `Expected a TLS handshake before the request is sent` | The port is not speaking TLS, or something intercepts it. | `scheme` must be `wss` for 9997 and the login port must be HTTPS. A plain-HTTP proxy on the path also lands here. |
-| `certificate` | `Expected leaf SHA-256 fingerprint <pin> via certSha256` | The host did not verify the certificate the grinder presented. | Pin the fingerprint (below), or fix the host clock if the certificate looks expired. A host without `tlsPinSha256` support ignores the pin and falls back to platform validation, which fails for the self-signed E64 certificate. |
+| `certificate` | `Expected leaf SHA-256 fingerprint <pin> via certSha256` | Verification of the grinder's certificate ran and failed. | Pin the fingerprint (below), or fix the host clock if the certificate looks expired. A host without `tlsPinSha256` support drops the pin and falls back to platform validation, which fails for the self-signed E64 certificate. |
 | `fingerprint` | `Expected leaf SHA-256 fingerprint <pin> via certSha256` | The certificate did not match `certSha256`. | Compare `certSha256` with the value from the command below. Re-run it against the port you pinned. |
 | `upgrade` | `Expected an HTTP 101 Switching Protocols upgrade` | TLS worked, the WebSocket handshake did not. | 401/403: mint a fresh token or check the Owner password; a live token lasts five minutes and allows one connection. Otherwise check that the port is 9997, not the web interface. |
 | `auth` | `Expected HTTP 2xx and a session token for the Owner password` | The login request reached the grinder and was refused. | Re-enter the Owner password. `HTTP 429` means rate limited: wait for the reported `Retry-After`. |
@@ -126,8 +126,10 @@ The staged record is always kept in memory; the verbose level adds the
 underlying error message and code.
 
 * Per request, no restart: `GET <diagnostics>?read=stages&verbose=1`.
-* Persistently: add `"DebugLog": "true"` to the plugin settings and reload. Any
-  value other than `"true"`/`"false"` is refused at load.
+* Persistently: switch on **Verbose connection diagnostics** (`DebugLog`, hidden
+  under advanced settings; Off by default) and reload. It is declared in the
+  manifest, so the host saves it; any value other than `"true"`/`"false"` is
+  refused at load.
 
 The quiet level prints stage, outcome, class and timing; the verbose level adds
 `last error: <class> <message> [code: <code>]`. Tokens, Owner passwords, auth
@@ -145,14 +147,22 @@ The bundle never contains a token, an Owner password, an auth header or a
 certificate body. When you paste it into an issue, also state the grinder's
 firmware version and whether the grinder is on a development image.
 
+`tls.comparison` says what the plugin sends and what a host that enforces pinning
+compares; `tls.enforcedByHost` says whether this host was seen to enforce it
+(`unknown`, `enforced`, `not enforced`). The plugin itself cannot verify the
+peer: it can only forward `tlsPinSha256` and observe whether the connection it
+asked for succeeds.
+
 ## Common causes of "it will not connect"
 
 * **The host ignores `tlsPinSha256`.** The plugin sets the pin; only the host can
-  enforce it. The setup assistant proves it by probing with a pin that cannot
-  match any certificate: a host that accepts that probe reports
-  `pin-unsupported` instead of naming a fingerprint it never verified. Once an
-  instance for that address exists, `?read=diagnostics` reports the result as
-  `tls.hostPinSupport` (`unknown`, `honoured` or `ignored`).
+  enforce it, and the Decaid builds inspected so far drop it, because a plugin
+  `fetch()` forwards only `url`, `method`, `headers` and `body`. The setup
+  assistant proves it by probing with a pin that cannot match any certificate: a
+  host that accepts that probe reports `pin-unsupported` instead of naming a
+  fingerprint it never verified. Once an instance for that address exists,
+  `?read=diagnostics` reports the result as `tls.hostPinSupport` (`unknown`,
+  `honoured` or `ignored`) and `tls.enforcedByHost`.
 * **The password is bound to the address.** Changing `host` in `InstancesJson`
   makes the plugin refuse the stored `PasswordsJson` entry, on purpose.
   Re-enter the password for the new address.

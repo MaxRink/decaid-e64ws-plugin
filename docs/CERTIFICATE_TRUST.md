@@ -16,9 +16,13 @@ Android's CA store or Windows' Trusted Root store.
 ## Recommended: pin the certificate per instance
 
 Set `certSha256` on the instance in `InstancesJson`. The plugin passes it as
-`tlsPinSha256` to the login request and the `wss` connection, and the Decaid
-host accepts the connection only when the SHA-256 of the leaf certificate
-(DER) matches. Nothing is added to any trust store.
+`tlsPinSha256` to the login request and the `wss` connection. A host that
+implements `tlsPinSha256` then accepts the connection only when the SHA-256 of
+the leaf certificate (DER) matches; a host that does not implement it (including
+the Decaid builds inspected for this change, whose plugin fetch forwards only
+`url`, `method`, `headers` and `body`) drops the option and falls back to
+platform validation. Nothing is added to any trust store, and the setup
+assistant reports which of the two you have.
 
 Read the fingerprint from the grinder on your own network:
 
