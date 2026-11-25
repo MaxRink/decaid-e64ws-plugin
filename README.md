@@ -157,11 +157,16 @@ WAL, so downloads are deliberately rare:
   between wait for the next download and are matched together;
 - otherwise one refresh per 6 hours while connected (the first one 60 s after
   connecting when none ran in the last 6 hours);
-- a failed attempt also waits 10 minutes; three failures in a row mark the log
-  `suspended`, which only stretches the next attempt to the 6-hour idle refresh,
-  so one later success resets the counter without reconnecting;
-- every log request is abandoned after 20 s, so a stalled socket cannot leave
-  the status at `downloading` or skip the next scheduled attempt.
+- after a failure the next attempt is the 6-hour idle refresh; a completed
+  grind can bring it forward but never inside the 10-minute minimum interval;
+  three failures in a row mark the log `suspended`, which stretches the next
+  attempt to that same idle refresh, so one later success resets the counter
+  without reconnecting;
+- every log request also races a 20 s deadline, so a stalled socket cannot
+  leave the status at `downloading` or skip the next scheduled attempt. On a
+  real host the plugin's own `fetchTimeout` (30 s) is the backstop that releases
+  a hung request; the deadline only aborts the socket where the runtime honours
+  an `AbortController` signal, which the host's fetch shim does not forward.
 
 When the Local API is enabled it is tried first; if it fails, the vendor ZIP
 still gets one attempt before the download counts as a failure, and the Local
@@ -188,10 +193,16 @@ redacted from the text. Both endpoints report the download status under `log`:
 401 or 403 sets `retryable` false, so the log stops attempting until the next
 connection rather than counting failures against a token that cannot work; a 429
 carries the device's `Retry-After` (delta-seconds or HTTP-date, capped at one
-hour) in `retryAfterMs`. `lastError` only ever carries the plugin's own fixed
-prefixes, capped at 160 characters: device-supplied error text is truncated to
-120 characters, stripped of control characters and redacted like the service
-log before it is appended to `local api <route>: `. A rejection from a queued
+hour) in `retryAfterMs`. An unparsable `Retry-After` is ignored rather than
+guessed, and the idle refresh applies. `lastError` only ever carries the
+plugin's own fixed prefixes, capped at 160 code points: device-supplied error
+text is redacted like the service log, then truncated to 120 code points (never
+splitting a surrogate pair), with C0, DEL and C1 controls turned into spaces and
+zero-width and bidi characters dropped, before it is appended to
+`local api <route>: `. Redaction is keyword-based, so a device that echoes the
+owner token without a `token=`-style prefix would still have it kept - the
+plugin never puts the token in the message itself, but it cannot recognise an
+arbitrary echo. A rejection from a queued
 download is caught, so it can neither surface as an unhandled rejection nor
 leave the status at `downloading`. Everything is
 held in memory only and bounded: 20 grind events and 500 service rows per

@@ -731,10 +731,17 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // suspend downloads, which then probe once per idle refresh and recover on the
   // first success. Only the parsed, bounded rows are kept; ZIP and CSV are dropped.
   //
-  // A stalled socket must never pin the log at "downloading": the request races a
-  // bounded deadline so the finally block always reschedules. QuickJS has no
-  // AbortController, so the deadline is a timer race that also aborts the socket
-  // when the host does expose one.
+  // A stalled socket must never pin the log at "downloading": every request races a
+  // bounded deadline, so the finally block that reschedules always runs even when a
+  // response never arrives. The deadline is the timer race, because the plugin's own
+  // runtime (QuickJS) has no AbortController and no host timer it can read.
+  //
+  // The host is the real backstop: the Decaid plugin host bounds every plugin fetch
+  // with fetchTimeout = 30 s and rejects the op with "fetch timeout", so a hung
+  // request is released there whether or not this deadline fires first. The abort
+  // below only reaches the socket where the runtime honours `signal`; the host's
+  // fetch shim forwards only url/method/headers/body, so on a real host the 30 s
+  // host timer releases the connection and the abort is a no-op.
   function fetchLogRequest(url, init, label) {
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     let timer = null;
@@ -811,17 +818,36 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   function logErrorMessage(error) {
     const message = error && typeof error.message === "string" ? error.message : "";
     return /^(grind log|no matching|zip|inflate|login|local api)/.test(message)
-      ? message.slice(0, LOG_ERROR_MAX) : "grind log download failed";
+      ? truncateCodePoints(message, LOG_ERROR_MAX) : "grind log download failed";
   }
-  // Device error text is free-form free text: collapse control characters, cap it
-  // and redact identifiers and secrets before it is appended to a fixed prefix.
+  // Cap by code point, never by code unit: slicing a surrogate pair leaves a lone
+  // half, which renders as a replacement character. Unpaired halves are dropped.
+  function truncateCodePoints(text, max) {
+    let out = "", count = 0;
+    for (const character of text) {
+      const code = character.codePointAt(0);
+      if (code >= 0xd800 && code <= 0xdfff) continue;
+      out += character;
+      if (++count === max) break;
+    }
+    return out;
+  }
+  // Device error text is free-form and reaches the diagnostics page, so it is
+  // cleaned before it is appended to a fixed prefix: C0, DEL and C1 controls become
+  // spaces, zero-width and bidi overrides are dropped (they can disguise the rest of
+  // the line), secrets are redacted as in the service log, and the result is capped
+  // by code point so a surrogate pair is never split into a lone half.
   function localApiText(value) {
-    const text = String(value === undefined || value === null ? "" : value)
-      .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    const cleaned = String(value === undefined || value === null ? "" : value)
+      .slice(0, 1000)
+      .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+      .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]+/g, "")
       .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, LOCAL_API_ERROR_MAX);
-    return text ? redact(text) : "invalid response";
+      .trim();
+    if (!cleaned) return "invalid response";
+    // Redact first so an expansion cannot push a secret back into the window.
+    const capped = truncateCodePoints(redact(cleaned), LOCAL_API_ERROR_MAX);
+    return capped.trim() ? capped : "invalid response";
   }
   function markLogOk(log) {
     Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0,
@@ -981,7 +1007,9 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     return error;
   }
   // Retry-After is delta-seconds or an HTTP-date. Both are capped, so a broken or
-  // hostile device cannot park the schedule for days.
+  // hostile device cannot park the schedule for days. A value the runtime cannot
+  // parse (Date.parse returns NaN for an unsupported form) yields null, and the
+  // caller then falls back to the fixed idle refresh.
   function retryAfterMs(response) {
     const header = response && response.headers && typeof response.headers.get === "function" ? response.headers.get("retry-after") : null;
     if (header === null || header === undefined || header === "") return null;

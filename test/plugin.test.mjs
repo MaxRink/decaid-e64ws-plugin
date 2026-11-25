@@ -814,11 +814,15 @@ test('csv parser handles quotes, escaped quotes, CRLF and semicolons', async () 
 });
 
 async function logHarness({zip, failDownloads = false, binary = true, refuse = () => false, hang = () => false,
-  route = () => null, extraSettings = {}, apiToken = null} = {}) {
+  route = () => null, extraSettings = {}, apiToken = null, abort = false} = {}) {
   let now = Date.parse('2026-11-23T12:00:00Z');
   class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const pending = new Map(); let nextTimer = 0;
-  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay, at: now + delay}); return id;}, clearTimeout: id => pending.delete(id), Date: FakeDate};
+  const aborts = [];
+  // The sandbox supplies no AbortController unless a test injects one through the
+  // timers spread, which is how the abort branch gets exercised.
+  const fakeAbort = {AbortController: class { constructor() { this.signal = {aborted: false}; } abort() { this.signal.aborted = true; aborts.push(this.signal); } }};
+  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay, at: now + delay}); return id;}, clearTimeout: id => pending.delete(id), Date: FakeDate, ...(abort ? fakeAbort : {})};
   const calls = [];
   const failing = () => typeof failDownloads === 'function' ? failDownloads() : failDownloads;
   const fetchImpl = async (url, init) => {
@@ -869,7 +873,8 @@ async function logHarness({zip, failDownloads = false, binary = true, refuse = (
   const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
   const events = () => JSON.parse(loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}).body);
   const service = (extra = {}) => loaded.plugin.handleHttpRequest({endpoint: 'service-log', method: 'GET', query: extra});
-  return {loaded, connect, grind, advance, downloads, localCalls, requests, logins, events, service, logTimers, calls, disconnect: () => loaded.registrations[0].handlers.disconnect()};
+  return {loaded, connect, grind, advance, downloads, localCalls, requests, logins, events, service, logTimers, calls, aborts,
+    disconnect: () => loaded.registrations[0].handlers.disconnect()};
 }
 // A Local API v1 response: the plugin reads .ok, .status, .headers.get() and .json().
 const localJson = (payload, status = 200, headers = {}) => ({ok: status >= 200 && status < 300, status,
@@ -1082,6 +1087,23 @@ test('a 429 honours Retry-After instead of the 6-hour idle refresh', async () =>
   await h.loaded.plugin.onUnload();
 });
 
+test('an HTTP-date Retry-After is honoured, and an unparsable one is ignored', async () => {
+  const at = Date.parse('2026-11-23T12:00:00Z');
+  const httpDate = new Date(at + 45 * 60000).toUTCString(); // IMF-fixdate
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'busy'}, 429, {'retry-after': httpDate}) : null});
+  await h.connect();
+  await h.grind();
+  const log = h.events().log;
+  assert.equal(log.retryAfterMs, 45 * 60000, `Date.parse understood ${httpDate}`);
+  assert.deepEqual(h.logTimers().map(([, timer]) => timer.delay), [45 * 60000], 'the next attempt follows the date');
+  await h.advance(44 * 60000);
+  assert.equal(h.localCalls('grind_log').length, 1, 'not before the date');
+  await h.advance(2 * 60000);
+  assert.equal(h.localCalls('grind_log').length, 2, 'one retry after the date');
+  await h.loaded.plugin.onUnload();
+});
+
 test('Retry-After is capped and an unusable value falls back to the idle refresh', async () => {
   for (const [header, expected] of [['999999', 3600000], ['soon', null], ['', null]]) {
     const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
@@ -1096,15 +1118,20 @@ test('Retry-After is capped and an unusable value falls back to the idle refresh
 });
 
 test('device error text is capped and sanitised before it reaches lastError', async () => {
-  const hostile = 'password=pw SSID HomeNet ip 192.168.1.23 secret=hunter2\n\u0007 ' + 'y'.repeat(400);
+  // C0 + DEL + C1 (NEL, CSI), bidi override and zero width, then astral padding so
+  // the cap lands in the middle of surrogate pairs.
+  const hostile = 'password=pw SSID HomeNet ip 192.168.1.23 secret=hunter2\n\u0007\u0085\u009b\u202e\u200b' + '😀'.repeat(200);
   const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
     route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: hostile}) : null});
   await h.connect();
   await h.grind();
   const log = h.events().log;
   assert.ok(log.lastError.startsWith('local api grind_log: '), log.lastError);
-  assert.ok(log.lastError.length <= 200, `capped, got ${log.lastError.length}`);
-  assert.ok(!/[\u0000-\u001f\u007f]/.test(log.lastError), 'control characters collapsed');
+  assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(log.lastError), 'C0, DEL and C1 controls collapsed');
+  assert.ok(!/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(log.lastError), 'zero-width and bidi dropped');
+  assert.equal(Buffer.from(log.lastError, 'utf8').toString('utf8'), log.lastError, 'no lone surrogate survived the cap');
+  assert.ok(Array.from(log.lastError).length <= 160, `capped by code point, got ${Array.from(log.lastError).length}`);
+  assert.ok(log.lastError.includes('😀'), 'astral characters survive intact');
   assert.ok(!log.lastError.includes('hunter2'), 'secrets redacted');
   assert.ok(!log.lastError.includes('pw'), 'passwords redacted');
   assert.ok(!log.lastError.includes('192.168.1.23'), 'addresses redacted');
@@ -1208,6 +1235,23 @@ test('a Local API error body that is not an object is reported without throwing'
   const log = h.events().log;
   assert.equal(log.lastError, 'local api grind_log: invalid response');
   assert.equal(log.failures, 1);
+  await h.loaded.plugin.onUnload();
+});
+
+test('the deadline aborts the request where the runtime honours a signal', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), abort: true, hang: (url) => url.endsWith('/download_machine_logs')});
+  await h.connect();
+  await h.grind();
+  const call = h.calls.find((entry) => entry.url.endsWith('/download_machine_logs'));
+  assert.ok(call.init.signal, 'the request carries an abort signal');
+  assert.equal(call.init.signal.aborted, false, 'not aborted while in flight');
+  assert.equal(h.aborts.length, 0);
+  await h.advance(20001);
+  assert.equal(call.init.signal.aborted, true, 'the deadline aborts the socket');
+  assert.equal(h.aborts.length, 1, 'exactly one abort');
+  const log = h.events().log;
+  assert.equal(log.status, 'failed');
+  assert.equal(log.lastError, 'grind log timeout');
   await h.loaded.plugin.onUnload();
 });
 
