@@ -1095,6 +1095,48 @@ test('Retry-After is capped and an unusable value falls back to the idle refresh
   }
 });
 
+test('device error text is capped and sanitised before it reaches lastError', async () => {
+  const hostile = 'password=pw SSID HomeNet ip 192.168.1.23 secret=hunter2\n\u0007 ' + 'y'.repeat(400);
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: hostile}) : null});
+  await h.connect();
+  await h.grind();
+  const log = h.events().log;
+  assert.ok(log.lastError.startsWith('local api grind_log: '), log.lastError);
+  assert.ok(log.lastError.length <= 200, `capped, got ${log.lastError.length}`);
+  assert.ok(!/[\u0000-\u001f\u007f]/.test(log.lastError), 'control characters collapsed');
+  assert.ok(!log.lastError.includes('hunter2'), 'secrets redacted');
+  assert.ok(!log.lastError.includes('pw'), 'passwords redacted');
+  assert.ok(!log.lastError.includes('192.168.1.23'), 'addresses redacted');
+  assert.ok(!log.lastError.includes('HomeNet'), 'network names redacted');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a rejected log download is caught instead of left as an unhandled rejection', async () => {
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    // A malformed host error: reading .message throws, so even the catch block fails.
+    const hostile = {get message() { throw new TypeError('hostile error object'); }};
+    const h = await logHarness({zip: Buffer.alloc(0), route: (url) => {
+      if (url.endsWith('/download_machine_logs')) throw hostile;
+      return null;
+    }});
+    await h.connect();
+    await h.grind();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    const log = h.events().log;
+    assert.equal(log.status, 'failed', 'the status is not left at downloading');
+    assert.equal(log.lastError, 'grind log download failed');
+    assert.equal(unhandled.length, 0, 'the rejection was caught');
+    await h.loaded.plugin.onUnload();
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
 async function inventoryRun({decaid = decaidApi(), extra = {}, grinderType = 'E64 WS', connects = 1} = {}) {
   const fetchImpl = hostFetch([], decaid);
   const fixture = {sent: [], events: []};

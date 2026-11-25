@@ -23,7 +23,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // Each machine-log download writes a ZIP to the grinder's /tmp and checkpoints
   // its SQLite WAL, so downloads are rare and bounded.
   const LOG_MIN_INTERVAL_MS = 10 * 60000, LOG_IDLE_REFRESH_MS = 6 * 3600000, LOG_CONNECT_DELAY_MS = 60000,
-    LOG_MAX_FAILURES = 3, LOG_REQUEST_TIMEOUT_MS = 20000, LOG_RETRY_AFTER_MAX_MS = 3600000, MAX_SERVICE_ROWS = 500;
+    LOG_MAX_FAILURES = 3, LOG_REQUEST_TIMEOUT_MS = 20000, LOG_RETRY_AFTER_MAX_MS = 3600000, LOCAL_API_ERROR_MAX = 120,
+    MAX_SERVICE_ROWS = 500;
   // Local API v1: owner-authorized read-only endpoints on dev-mode devices
   // The plugin only ever reads two of these: grind_log and service_log.
   const LOCAL_API_STATUS = {401: "unauthorized", 403: "forbidden", 409: "conflict", 422: "unprocessable", 429: "rate-limited", 503: "unavailable"};
@@ -760,7 +761,13 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const epoch = instance.epoch;
     instance.logTimer = setTimeout(() => {
       instance.logTimer = null; log.dueAt = null;
-      if (instance.epoch === epoch) downloadLogs(instance);
+      if (instance.epoch !== epoch) return;
+      // downloadLogs counts its own failures, but an unexpected throw must not
+      // escape as an unhandled rejection and must not leave "downloading" behind.
+      downloadLogs(instance).catch(() => {
+        if (log.status === "downloading") log.status = "failed";
+        log.lastError = "grind log download failed";
+      });
     }, Math.max(0, due - Date.now()));
   }
   async function downloadLogs(instance) {
@@ -792,10 +799,27 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       Object.assign(log, {status: retryable ? (log.failures >= LOG_MAX_FAILURES ? "suspended" : "failed") : (cause.class || "failed"),
         errorClass: cause && typeof cause.class === "string" ? cause.class : "failed",
         retryable, retryAfterMs: cause && typeof cause.retryAfterMs === "number" ? cause.retryAfterMs : null,
-        lastError: cause && /^(grind log|no matching|zip|inflate|login|local api)/.test(cause.message) ? cause.message : "grind log download failed"});
+        lastError: logErrorMessage(cause)});
     } finally {
       if (instance.epoch === epoch) queueLogDownload(instance, typeof log.retryAfterMs === "number" ? log.retryAfterMs : LOG_IDLE_REFRESH_MS);
     }
+  }
+  // lastError is rendered by the diagnostics page, so only the plugin's own
+  // fixed prefixes pass through - capped, and never a device's raw text.
+  function logErrorMessage(error) {
+    const message = error && typeof error.message === "string" ? error.message : "";
+    return /^(grind log|no matching|zip|inflate|login|local api)/.test(message)
+      ? message.slice(0, LOCAL_API_ERROR_MAX + 64) : "grind log download failed";
+  }
+  // Device error text is free-form free text: collapse control characters, cap it
+  // and redact identifiers and secrets before it is appended to a fixed prefix.
+  function localApiText(value) {
+    const text = String(value === undefined || value === null ? "" : value)
+      .replace(/[\u0000-\u001f\u007f]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, LOCAL_API_ERROR_MAX);
+    return text ? redact(text) : "invalid response";
   }
   function markLogOk(log) {
     Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0,
@@ -848,7 +872,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     let response = await fetchJson("grind_log", {limit: 5000});
     if (!response || !response.ok) throw localApiStatusError("grind_log", response);
     let data = await response.json();
-    if (!data.success || !data.data || !data.data.rows) throw new Error("local api grind_log: " + (data.error || "invalid response"));
+    if (!data || !data.success || !data.data || !data.data.rows) throw new Error("local api grind_log: " + localApiText(data && data.error));
     const rows = data.data.rows.map((row) => {
       // Convert Local API row format to CSV-like format for grindRows compatibility
       const flat = {};
@@ -869,7 +893,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     response = await fetchJson("service_log", {limit: MAX_SERVICE_ROWS});
     if (!response || !response.ok) throw localApiStatusError("service_log", response);
     data = await response.json();
-    if (!data.success || !data.data || !data.data.rows) throw new Error("local api service_log: " + (data.error || "invalid response"));
+    if (!data || !data.success || !data.data || !data.data.rows) throw new Error("local api service_log: " + localApiText(data && data.error));
     mergeServiceRowsLocalApi(instance, data.data.rows);
   }
   function matchGrindRowLocalApi(instance, grind, rows) {

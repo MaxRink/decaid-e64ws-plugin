@@ -188,7 +188,12 @@ redacted from the text. Both endpoints report the download status under `log`:
 401 or 403 sets `retryable` false, so the log stops attempting until the next
 connection rather than counting failures against a token that cannot work; a 429
 carries the device's `Retry-After` (delta-seconds or HTTP-date, capped at one
-hour) in `retryAfterMs`. Everything is
+hour) in `retryAfterMs`. `lastError` only ever carries the plugin's own fixed
+prefixes, capped at 160 characters: device-supplied error text is truncated to
+120 characters, stripped of control characters and redacted like the service
+log before it is appended to `local api <route>: `. A rejection from a queued
+download is caught, so it can neither surface as an unhandled rejection nor
+leave the status at `downloading`. Everything is
 held in memory only and bounded: 20 grind events and 500 service rows per
 instance. The plugin persists nothing and never keeps the ZIP or the CSV.
 
