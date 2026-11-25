@@ -813,21 +813,32 @@ test('csv parser handles quotes, escaped quotes, CRLF and semicolons', async () 
   assert.deepEqual(plain(parseCsv('﻿a;b\n1;2\n')), [['a', 'b'], ['1', '2']]);
 });
 
-async function logHarness({zip, failDownloads = false, binary = true, refuse = () => false} = {}) {
+async function logHarness({zip, failDownloads = false, binary = true, refuse = () => false, hang = () => false,
+  route = () => null, extraSettings = {}, apiToken = null, abort = false} = {}) {
   let now = Date.parse('2026-11-23T12:00:00Z');
   class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const pending = new Map(); let nextTimer = 0;
-  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay, at: now + delay}); return id;}, clearTimeout: id => pending.delete(id), Date: FakeDate};
+  const aborts = [];
+  // The sandbox supplies no AbortController unless a test injects one through the
+  // timers spread, which is how the abort branch gets exercised.
+  const fakeAbort = {AbortController: class { constructor() { this.signal = {aborted: false}; } abort() { this.signal.aborted = true; aborts.push(this.signal); } }};
+  const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay, at: now + delay}); return id;}, clearTimeout: id => pending.delete(id), Date: FakeDate, ...(abort ? fakeAbort : {})};
   const calls = [];
+  const failing = () => typeof failDownloads === 'function' ? failDownloads() : failDownloads;
   const fetchImpl = async (url, init) => {
     calls.push({url, init});
+    if (hang(url, init)) return new Promise(() => {});
+    const custom = route(url, init);
+    if (custom) return custom;
     if (url.endsWith('/login')) return {ok: true, status: 200, headers: {get: (name) => name === 'authorization' ? `Bearer t${calls.length}` : 'PHPSESSID=abc; path=/'}, text: async () => ''};
-    if (failDownloads) return {ok: false, status: 503, headers: {get: () => null}, base64: async () => ''};
+    if (failing()) return {ok: false, status: 503, headers: {get: () => null}, base64: async () => ''};
     if (refuse(init)) return {ok: false, status: 400, headers: {get: () => null}, base64: async () => ''};
+    if (/\/rest_api\/(grind_log|service_log)$/.test(url)) return localJson({success: true, data: {rows: []}});
     return {ok: true, status: 200, headers: {get: () => null}, ...(binary ? {base64: async () => zip.toString('base64')} : {})};
   };
   const fixture = {sent: [], events: []};
-  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100, restPort: 8443}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})}, fixture, timers, fetchImpl);
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100, restPort: 8443}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}}),
+    ...(apiToken ? {UseLocalApi: 'true', ApiTokensJson: JSON.stringify({one: {host: '127.0.0.1', token: apiToken}})} : {}), ...extraSettings}, fixture, timers, fetchImpl);
   const settle = async () => {
     for (let i = 0; i < 8; i++) {
       await new Promise(resolve => setImmediate(resolve));
@@ -856,12 +867,18 @@ async function logHarness({zip, failDownloads = false, binary = true, refuse = (
     await settle();
   };
   const downloads = () => calls.filter((call) => call.url.endsWith('/download_machine_logs')).length;
+  const localCalls = (name) => calls.filter((call) => call.url.endsWith('/rest_api/' + name));
+  const requests = () => calls.map((call) => call.url.replace('https://127.0.0.1:8443/rest_api/', ''));
   const logins = () => calls.filter((call) => call.url.endsWith('/login')).length;
   const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
   const events = () => JSON.parse(loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}).body);
   const service = (extra = {}) => loaded.plugin.handleHttpRequest({endpoint: 'service-log', method: 'GET', query: extra});
-  return {loaded, connect, grind, advance, downloads, logins, events, service, logTimers, calls, disconnect: () => loaded.registrations[0].handlers.disconnect()};
+  return {loaded, connect, grind, advance, downloads, localCalls, requests, logins, events, service, logTimers, calls, aborts,
+    disconnect: () => loaded.registrations[0].handlers.disconnect()};
 }
+// A Local API v1 response: the plugin reads .ok, .status, .headers.get() and .json().
+const localJson = (payload, status = 200, headers = {}) => ({ok: status >= 200 && status < 300, status,
+  headers: {get: (name) => headers[name.toLowerCase()] ?? null}, json: async () => payload});
 const stampAt = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
 const grindHeader = 'grind_id,grind_uuid,grind_date_time,grind_ddd,grind_duration,grind_weight,grind_successfull,recipe_index,recipe_uuid,recipe_mode,recipe_amount,recipe_type,recipe_coarseness,recipe_brew_time,recipe_brew_weight';
@@ -942,6 +959,300 @@ test('log downloads respect old hosts, suspend after repeated failures and stay 
   assert.deepEqual([kept[0].id, kept.at(-1).id], [201, 700]);
   assert.equal(big.events().events.length, 20);
   await big.loaded.plugin.onUnload();
+});
+
+test('a log request that never resolves cannot leave the log downloading', async () => {
+  const stalled = await logHarness({zip: Buffer.alloc(0), hang: (url) => url.endsWith('/download_machine_logs')});
+  await stalled.connect();
+  await stalled.grind();
+  assert.equal(stalled.downloads(), 1, 'the grind starts the download');
+  assert.equal(stalled.events().log.status, 'downloading');
+  await stalled.advance(20001);
+  const log = stalled.events().log;
+  assert.equal(log.status, 'failed', 'the bounded deadline ends the download');
+  assert.equal(log.failures, 1);
+  assert.equal(log.lastError, 'grind log timeout');
+  assert.deepEqual(stalled.logTimers().map(([, timer]) => timer.delay), [6 * 3600000], 'the finally block still rescheduled');
+  await stalled.loaded.plugin.onUnload();
+
+  const local = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    hang: (url) => url.endsWith('/rest_api/grind_log')});
+  await local.connect();
+  await local.grind();
+  assert.equal(local.localCalls('grind_log').length, 1, 'the local API is asked first');
+  assert.equal(local.events().log.status, 'downloading');
+  await local.advance(20001);
+  const localLog = local.events().log;
+  assert.equal(localLog.status, 'failed', 'the local API deadline ends the download');
+  assert.equal(localLog.failures, 1);
+  assert.equal(localLog.lastError, 'local api timeout');
+  await local.loaded.plugin.onUnload();
+});
+
+test('a Local API failure still tries the vendor ZIP once before counting a failure', async () => {
+  const zip = zipOf([{name: 'HemroE64WSServiceLogs_SN1_x.csv', data: [serviceHeader, '1,1,PowerOn,2026-11-23 11:00:00,Firmware started'].join('\n'), method: 8}]);
+  const h = await logHarness({zip, apiToken: 'owner-token',
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'token rejected'}, 401) : null});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 1, 'the Local API is asked first');
+  assert.equal(h.downloads(), 1, 'the vendor ZIP is tried once after the Local API refused');
+  const log = h.events().log;
+  assert.equal(log.status, 'ok', 'the fallback succeeded');
+  assert.equal(log.failures, 0, 'a successful fallback is not a failure');
+  assert.equal(JSON.parse(h.service().body).rows.length, 1, 'the fallback still fills the service log');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a Local API and ZIP failure together count one failure', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'nope'}, 401) : null});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 1);
+  assert.equal(h.downloads(), 1, 'the ZIP is still tried');
+  const log = h.events().log;
+  assert.equal(log.failures, 1, 'one attempt is one failure, not two');
+  assert.equal(log.status, 'unauthorized');
+  assert.equal(log.errorClass, 'unauthorized');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a suspended log recovers on a later successful attempt', async () => {
+  let failing = true;
+  const zip = zipOf([{name: 'HemroE64WSServiceLogs_SN1_x.csv', data: [serviceHeader, '1,1,PowerOn,2026-11-23 11:00:00,Firmware started'].join('\n'), method: 8}]);
+  const h = await logHarness({zip, failDownloads: () => failing});
+  await h.connect();
+  for (let i = 0; i < 3; i++) { await h.grind(); await h.advance(10 * 60000); }
+  assert.equal(h.events().log.failures, 3);
+  assert.equal(h.events().log.status, 'suspended');
+  const before = h.downloads();
+  failing = false;
+  await h.grind();
+  assert.equal(h.downloads(), before, 'a suspended log is not retried on every grind');
+  await h.advance(6 * 3600000);
+  assert.equal(h.downloads(), before + 1, 'the suspended log probes once per idle refresh');
+  const log = h.events().log;
+  assert.equal(log.status, 'ok', 'a success lifts the suspension without a new connection');
+  assert.equal(log.failures, 0, 'a successful request resets the counter');
+  await h.loaded.plugin.onUnload();
+});
+
+test('Local API statuses are classified and a refusal is marked non-retryable', async () => {
+  for (const [status, errorClass, retryable] of [[401, 'unauthorized', false], [403, 'forbidden', false], [409, 'conflict', true],
+    [422, 'unprocessable', true], [429, 'rate-limited', true], [503, 'unavailable', true]]) {
+    const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+      route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'device says no'}, status) : null});
+    await h.connect();
+    await h.grind();
+    const log = h.events().log;
+    assert.equal(log.errorClass, errorClass, `HTTP ${status} class`);
+    assert.equal(log.retryable, retryable, `HTTP ${status} retryable`);
+    assert.equal(log.status, retryable ? 'failed' : errorClass, `HTTP ${status} status`);
+    assert.equal(log.lastError, `local api grind_log HTTP ${status}`, `HTTP ${status} message`);
+    await h.loaded.plugin.onUnload();
+  }
+});
+
+test('a refused Local API token stops the log until the next connection', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'no'}, 401) : null});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 1);
+  assert.equal(h.events().log.retryable, false);
+  await h.grind();
+  await h.advance(24 * 3600000);
+  assert.equal(h.localCalls('grind_log').length, 1, 'a refused token is not retried in the same session');
+  await h.disconnect();
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 2, 'the next connection retries once');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a 429 honours Retry-After instead of the 6-hour idle refresh', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'busy'}, 429, {'retry-after': '1800'}) : null});
+  await h.connect();
+  await h.grind();
+  const log = h.events().log;
+  assert.equal(log.errorClass, 'rate-limited');
+  assert.equal(log.retryAfterMs, 30 * 60000);
+  await h.grind();
+  await h.advance(29 * 60000);
+  assert.equal(h.localCalls('grind_log').length, 1, 'a grind does not jump the Retry-After queue');
+  await h.advance(2 * 60000);
+  assert.equal(h.localCalls('grind_log').length, 2, 'one retry once Retry-After has passed');
+  await h.loaded.plugin.onUnload();
+});
+
+test('an HTTP-date Retry-After is honoured, and an unparsable one is ignored', async () => {
+  const at = Date.parse('2026-11-23T12:00:00Z');
+  const httpDate = new Date(at + 45 * 60000).toUTCString(); // IMF-fixdate
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'busy'}, 429, {'retry-after': httpDate}) : null});
+  await h.connect();
+  await h.grind();
+  const log = h.events().log;
+  assert.equal(log.retryAfterMs, 45 * 60000, `Date.parse understood ${httpDate}`);
+  assert.deepEqual(h.logTimers().map(([, timer]) => timer.delay), [45 * 60000], 'the next attempt follows the date');
+  await h.advance(44 * 60000);
+  assert.equal(h.localCalls('grind_log').length, 1, 'not before the date');
+  await h.advance(2 * 60000);
+  assert.equal(h.localCalls('grind_log').length, 2, 'one retry after the date');
+  await h.loaded.plugin.onUnload();
+});
+
+test('Retry-After is capped and an unusable value falls back to the idle refresh', async () => {
+  for (const [header, expected] of [['999999', 3600000], ['soon', null], ['', null]]) {
+    const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+      route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'busy'}, 429, {'retry-after': header}) : null});
+    await h.connect();
+    await h.grind();
+    assert.equal(h.events().log.retryAfterMs, expected, `Retry-After ${JSON.stringify(header)}`);
+    assert.deepEqual(h.logTimers().map(([, timer]) => timer.delay), [expected === null ? 6 * 3600000 : expected],
+      `next attempt after ${JSON.stringify(header)}`);
+    await h.loaded.plugin.onUnload();
+  }
+});
+
+test('device error text is capped and sanitised before it reaches lastError', async () => {
+  // C0 + DEL + C1 (NEL, CSI), bidi override and zero width, then astral padding so
+  // the cap lands in the middle of surrogate pairs.
+  const hostile = 'password=pw SSID HomeNet ip 192.168.1.23 secret=hunter2\n\u0007\u0085\u009b\u202e\u200b' + '😀'.repeat(200);
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: hostile}) : null});
+  await h.connect();
+  await h.grind();
+  const log = h.events().log;
+  assert.ok(log.lastError.startsWith('local api grind_log: '), log.lastError);
+  assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(log.lastError), 'C0, DEL and C1 controls collapsed');
+  assert.ok(!/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/.test(log.lastError), 'zero-width and bidi dropped');
+  assert.equal(Buffer.from(log.lastError, 'utf8').toString('utf8'), log.lastError, 'no lone surrogate survived the cap');
+  assert.ok(Array.from(log.lastError).length <= 160, `capped by code point, got ${Array.from(log.lastError).length}`);
+  assert.ok(log.lastError.includes('😀'), 'astral characters survive intact');
+  assert.ok(!log.lastError.includes('hunter2'), 'secrets redacted');
+  assert.ok(!log.lastError.includes('pw'), 'passwords redacted');
+  assert.ok(!log.lastError.includes('192.168.1.23'), 'addresses redacted');
+  assert.ok(!log.lastError.includes('HomeNet'), 'network names redacted');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a rejected log download is caught instead of left as an unhandled rejection', async () => {
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    // A malformed host error: reading .message throws, so even the catch block fails.
+    const hostile = {get message() { throw new TypeError('hostile error object'); }};
+    const h = await logHarness({zip: Buffer.alloc(0), route: (url) => {
+      if (url.endsWith('/download_machine_logs')) throw hostile;
+      return null;
+    }});
+    await h.connect();
+    await h.grind();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    const log = h.events().log;
+    assert.equal(log.status, 'failed', 'the status is not left at downloading');
+    assert.equal(log.lastError, 'grind log download failed');
+    assert.equal(unhandled.length, 0, 'the rejection was caught');
+    await h.loaded.plugin.onUnload();
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
+});
+
+test('the Local API fills the grind log and the service log from its two routes', async () => {
+  const at = Date.parse('2026-11-23T12:00:00Z');
+  const grindRows = [
+    {grind_id: 2, grind_uuid: 'local-uuid', grind_date_time: stampAt(at), grind_ddd: 819, grind_duration: 8300, grind_weight: 18070,
+      grind_successfull: 1, grind_trigger: 'GrindByWeight', recipe_index: 1, recipe_uuid: 'r1', recipe_mode: 'GbW', recipe_type: 'Espresso',
+      recipe_amount: 18000, recipe_coarseness: 500, recipe_brew_time: 27000, recipe_brew_weight: 36000, recipe_icon: 'espresso', recipe_gbs_enabled: 1},
+    {grind_id: 3, grind_uuid: 'other-dose', grind_date_time: stampAt(at), grind_ddd: 820, grind_duration: 8000, grind_weight: 20100,
+      grind_successfull: 1, recipe_amount: 20000}];
+  const serviceRows = [
+    {event_id: 1, event_type_id: 7, event_type: 'PowerOn', event_date_time: '2026-11-23 11:00:00', event_details: 'Firmware V01.16 started'},
+    {event_id: 2, event_type_id: 8, event_type: 'WifiConnected', event_date_time: '2026-11-23 11:00:05',
+      event_details: 'SSID HomeNet ip 192.168.1.23 mac aa:bb:cc:dd:ee:ff password=hunter2'}];
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', route: (url) => {
+    if (url.endsWith('/rest_api/grind_log')) return localJson({success: true, data: {rows: grindRows}});
+    if (url.endsWith('/rest_api/service_log')) return localJson({success: true, data: {rows: serviceRows}});
+    return null;
+  }});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.downloads(), 0, 'the vendor ZIP is not used when the Local API answers');
+  const [grindCall] = h.localCalls('grind_log');
+  assert.equal(grindCall.url, 'https://127.0.0.1:8443/rest_api/grind_log');
+  assert.equal(grindCall.init.method, 'POST');
+  assert.equal(grindCall.init.headers['X-E64-Local-Token'], 'owner-token');
+  assert.equal(grindCall.init.headers.Cookie, 'PHPSESSID=abc');
+  assert.deepEqual(JSON.parse(grindCall.init.body), {limit: 5000});
+  assert.deepEqual(JSON.parse(h.localCalls('service_log')[0].init.body), {limit: 500});
+  const [event] = h.events().events;
+  assert.equal(event.grindUuid, 'local-uuid', 'the target weight rules out the 20 g row');
+  assert.equal(event.trigger, 'GrindByWeight');
+  assert.deepEqual(event.log, {grindWeightGr: 18.07, grindDurationMs: 8300, setting: '82', successful: true});
+  assert.deepEqual(event.recipe, {index: 1, uuid: 'r1', mode: 'GbW', type: 'Espresso', amountGr: 18, setting: '50',
+    brewTimeMs: 27000, brewWeightGr: 36, icon: 'espresso', gbsEnabled: true});
+  const service = JSON.parse(h.service().body);
+  assert.deepEqual(service.rows.map((row) => [row.id, row.eventType]), [[1, 'PowerOn'], [2, 'WifiConnected']]);
+  assert.equal(service.rows[1].details, 'SSID <redacted> ip <ip> mac <mac> password=<redacted>');
+  const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
+  const html = await h.loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {...query, ui: '1'}});
+  assert.equal(html.body.includes('owner-token'), false, 'the Local API token never reaches the page');
+  assert.equal(JSON.stringify(h.events()).includes('owner-token'), false, 'nor the log payload');
+  assert.equal(JSON.stringify(await h.loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query})).includes('owner-token'), false,
+    'nor the diagnostics JSON');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a Local API payload error names its route, is sanitised and still falls back', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true, route: (url) => {
+    if (url.endsWith('/rest_api/grind_log')) return localJson({success: true, data: {rows: []}});
+    if (url.endsWith('/rest_api/service_log')) return localJson({success: false, error: 'table locked\nby writer'});
+    return null;
+  }});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 1);
+  assert.equal(h.localCalls('service_log').length, 1);
+  assert.equal(h.downloads(), 1, 'the ZIP is still tried once after a payload error');
+  const log = h.events().log;
+  assert.equal(log.lastError, 'local api service_log: table locked by writer', 'newlines collapsed');
+  assert.equal(log.failures, 1);
+  assert.equal(log.status, 'failed');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a Local API error body that is not an object is reported without throwing', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson(null) : null});
+  await h.connect();
+  await h.grind();
+  const log = h.events().log;
+  assert.equal(log.lastError, 'local api grind_log: invalid response');
+  assert.equal(log.failures, 1);
+  await h.loaded.plugin.onUnload();
+});
+
+test('the deadline aborts the request where the runtime honours a signal', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), abort: true, hang: (url) => url.endsWith('/download_machine_logs')});
+  await h.connect();
+  await h.grind();
+  const call = h.calls.find((entry) => entry.url.endsWith('/download_machine_logs'));
+  assert.ok(call.init.signal, 'the request carries an abort signal');
+  assert.equal(call.init.signal.aborted, false, 'not aborted while in flight');
+  assert.equal(h.aborts.length, 0);
+  await h.advance(20001);
+  assert.equal(call.init.signal.aborted, true, 'the deadline aborts the socket');
+  assert.equal(h.aborts.length, 1, 'exactly one abort');
+  const log = h.events().log;
+  assert.equal(log.status, 'failed');
+  assert.equal(log.lastError, 'grind log timeout');
+  await h.loaded.plugin.onUnload();
 });
 
 async function inventoryRun({decaid = decaidApi(), extra = {}, grinderType = 'E64 WS', connects = 1} = {}) {

@@ -157,8 +157,20 @@ WAL, so downloads are deliberately rare:
   between wait for the next download and are matched together;
 - otherwise one refresh per 6 hours while connected (the first one 60 s after
   connecting when none ran in the last 6 hours);
-- a failed attempt also waits 10 minutes, and three failures in a row stop
-  downloads until the next successful connection.
+- after a failure the next attempt is the 6-hour idle refresh; a completed
+  grind can bring it forward but never inside the 10-minute minimum interval;
+  three failures in a row mark the log `suspended`, which stretches the next
+  attempt to that same idle refresh, so one later success resets the counter
+  without reconnecting;
+- every log request also races a 20 s deadline, so a stalled socket cannot
+  leave the status at `downloading` or skip the next scheduled attempt. On a
+  real host the plugin's own `fetchTimeout` (30 s) is the backstop that releases
+  a hung request; the deadline only aborts the socket where the runtime honours
+  an `AbortController` signal, which the host's fetch shim does not forward.
+
+When the Local API is enabled it is tried first; if it fails, the vendor ZIP
+still gets one attempt before the download counts as a failure, and the Local
+API reason is the one reported in `lastError`.
 
 Downloads reuse the Owner session the plugin already opened to mint the
 connection's WebSocket token. Only when the grinder refuses that session does
@@ -172,9 +184,27 @@ is.
 same downloads in ascending `event_id` order: `id`, `eventTypeId`, `eventType`,
 `eventDateTime` and `details`. Serial numbers, IP and MAC addresses, Wi-Fi names
 and passwords, session IDs, tokens, long hexadecimal IDs and email addresses are
-redacted from the text. Both endpoints report the download status under `log`
-(`ok`, `downloading`, `failed`, `suspended`, `unsupported-host` or
-`needs-mint-tokens`, with `lastAt`, `lastAttemptAt`, `lastError`). Everything is
+redacted from the text. Both endpoints report the download status under `log`:
+`status` (`ok`, `downloading`, `failed`, `suspended`, `unsupported-host`,
+`needs-mint-tokens`, or a Local API refusal - `unauthorized`, `forbidden`),
+`lastAt`, `lastAttemptAt`, `lastError`, and the Local API classification
+`errorClass` (`unauthorized`, `forbidden`, `conflict`, `unprocessable`,
+`rate-limited`, `unavailable` or `failed`), `retryable` and `retryAfterMs`. A
+401 or 403 sets `retryable` false, so the log stops attempting until the next
+connection rather than counting failures against a token that cannot work; a 429
+carries the device's `Retry-After` (delta-seconds or HTTP-date, capped at one
+hour) in `retryAfterMs`. An unparsable `Retry-After` is ignored rather than
+guessed, and the idle refresh applies. `lastError` only ever carries the
+plugin's own fixed prefixes, capped at 160 code points: device-supplied error
+text is redacted like the service log, then truncated to 120 code points (never
+splitting a surrogate pair), with C0, DEL and C1 controls turned into spaces and
+zero-width and bidi characters dropped, before it is appended to
+`local api <route>: `. Redaction is keyword-based, so a device that echoes the
+owner token without a `token=`-style prefix would still have it kept - the
+plugin never puts the token in the message itself, but it cannot recognise an
+arbitrary echo. A rejection from a queued
+download is caught, so it can neither surface as an unhandled rejection nor
+leave the status at `downloading`. Everything is
 held in memory only and bounded: 20 grind events and 500 service rows per
 instance. The plugin persists nothing and never keeps the ZIP or the CSV.
 
@@ -344,6 +374,55 @@ fails with `login backoff` without contacting the grinder.
 fixed category (`login HTTP <status>`, `login returned no bearer token` or
 `login request failed`) and never echoes device response text. Static `TokensJson` values are reused, so a static token
 must be refreshed manually after a single-connection close.
+
+## Local API v1 (dev-mode devices)
+
+On **dev-mode devices only** (development image where the first word of `/etc/issue` is `development`), the plugin can use the Local Owner HTTP API v1 for more efficient log retrieval. This API provides direct access to SQLite tables without requiring the vendor's ZIP download mechanism.
+
+To enable Local API support:
+
+1. **Deploy the Local API module** to the device using `e64root api deploy` (see [mahlkoenig-e64ws-local-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/blob/main/docs/LOCAL_API.md))
+2. **Configure the plugin**:
+   - Set `UseLocalApi` to `"true"` in the plugin settings
+   - Put the owner token in `ApiTokensJson`: `{"one":{"host":"<instance host>","token":"<local-api-token>"}}`
+
+The Local API token is **separate** from the WSS token. The API's own route
+table lists eleven read-only routes; this plugin calls exactly **two** of them:
+
+- `POST /rest_api/grind_log` with `{"limit":5000}` - grind history with recipe
+  data, matched to this plugin's grind events by `recipe_amount` and
+  `grind_date_time`;
+- `POST /rest_api/service_log` with `{"limit":500}` - the service/event rows
+  behind the `service-log` endpoint.
+
+The other nine - `capabilities`, `machine`, `alert_log`, `portafilters`,
+`recipes`, `settings`, `config`, `file` and `ws_token` - are not called. The
+plugin is **read-only**: it does not call the action layer at all. The contract
+defines no route for motor, calibration, ESP, firmware, pairing, user
+management, database download or any `GrinderAction`, and the plugin sends no
+state-changing request through the Local API - it only reads these two logs.
+Grind records and service rows are treated exactly like the ZIP path: bounded,
+redacted and kept in memory only.
+
+Both requests carry `X-E64-Local-Token` (plus the `PHPSESSID` cookie from the
+vendor REST session) and are pinned with `tlsPinSha256` when `certSha256` is
+set. The token is never written to a log, an error message or the diagnostics
+page.
+
+When `UseLocalApi` is enabled and a valid token is configured, the plugin will:
+- read the grind and service logs through those two routes;
+- fall back to the vendor's `download_machine_logs` ZIP when the Local API
+  fails, before the attempt counts as a failure;
+- keep using the standard WSS connection for real-time state updates.
+
+**Security notes:**
+- the Local API needs both a vendor REST session AND the owner token;
+- the device is expected to redact Wi-Fi passwords, role credentials and cloud
+  URLs; the plugin additionally redacts and truncates every field it keeps;
+- only dev-mode devices serve the API, and only devices with the Local API
+  module deployed answer it.
+
+See [mahlkoenig-e64ws-local-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/blob/main/docs/LOCAL_API.md) for the full API contract.
 
 ## Xenia mode
 
