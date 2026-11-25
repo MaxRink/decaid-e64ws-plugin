@@ -2102,19 +2102,18 @@ test('a 100 kB device error cannot inflate the message, the notification or the 
 
 test('the manifest declares every setting the code reads, with the typing the host stores', () => {
   const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
-  // Declaring the Local API keys belongs to the Local API change (#17/#18); this
-  // test covers every other key the code parses as JSON text.
-  const pendingLocalApi = ['ApiTokensJson', 'UseLocalApi'];
   const read = [...new Set([...source.matchAll(/jsonSetting\(settings, "([A-Za-z][A-Za-z0-9]*)"/g)].map((match) => match[1]))];
+  assert.ok(read.length >= 10, 'the sweep found the settings the code reads');
   assert.ok(read.includes('DebugLog'), 'the code reads DebugLog');
+  // No exemptions: a key the code reads and the manifest does not declare is a
+  // setting the host refuses to save and drops on load.
   for (const key of read) {
-    if (pendingLocalApi.includes(key) && !manifest.settings[key]) continue;
     assert.ok(manifest.settings[key], key + ' is declared in the manifest, so the host can save it');
     assert.equal(typeof manifest.settings[key].type, 'string', key + ' declares the type the host validates');
   }
   // secure-versus-plain typing: credentials are stored as secure settings, a log
   // switch is not one. Display hints are deliberately not asserted.
-  for (const key of ['TokensJson', 'PasswordsJson']) assert.equal(manifest.settings[key].secure, true, key + ' is a secure setting');
+  for (const key of ['TokensJson', 'PasswordsJson', 'ApiTokensJson']) assert.equal(manifest.settings[key].secure, true, key + ' is a secure setting');
   const debugLog = manifest.settings.DebugLog;
   assert.equal(debugLog.type, 'enum', 'jsonSetting parses JSON text, so the switch is an enum of strings');
   assert.deepEqual(debugLog.values, ['false', 'true']);
