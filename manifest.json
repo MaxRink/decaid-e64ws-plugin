@@ -122,6 +122,29 @@
       "default": "{}",
       "hidden": true
     },
+    "UseLocalApi": {
+      "type": "enum",
+      "values": [
+        "false",
+        "true"
+      ],
+      "label": "Use the Local API",
+      "description": "Read the grind and service logs through the Local Owner API v1 before the vendor ZIP download. Needs a deployed Local API module, a development image and an entry in ApiTokensJson. Default false.",
+      "default": "false",
+      "valueLabels": {
+        "true": "On",
+        "false": "Off"
+      },
+      "advanced": true
+    },
+    "ApiTokensJson": {
+      "type": "string",
+      "label": "E64 Local API tokens",
+      "description": "JSON object mapping instance ids to {\"host\": <instance host>, \"token\": <Local Owner API v1 token>}. Only used while the instance host matches and Use the Local API is on. This token is separate from the WSS token and is stored as a secure setting, never in the ordinary settings.",
+      "secure": true,
+      "default": "{}",
+      "advanced": true
+    },
     "AllowNoPasswordWorkaround": {
       "type": "enum",
       "values": [
