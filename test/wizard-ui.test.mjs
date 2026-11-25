@@ -113,7 +113,7 @@ for (const theme of ['light', 'dark']) {
       await expect(page.locator('#saveOut')).toContainText('Saved');
       const [save] = host.store.saves;
       const instances = JSON.parse(save.InstancesJson);
-      expect(instances).toEqual([{id: 'e64', name: 'Mahlkönig E64', scheme: 'wss', host: '192.168.1.40', port: 9997, restPort: 443, pollMs: 1000, certSha256: FLEET}]);
+      expect(instances).toEqual([{id: 'e64', name: 'Mahlkönig grinder', scheme: 'wss', host: '192.168.1.40', port: 9997, restPort: 443, pollMs: 1000, certSha256: FLEET}]);
       expect(JSON.parse(save.PasswordsJson)).toEqual({e64: {host: '192.168.1.40', password: 'right'}});
       expect([save.MintTokens, save.AdjustmentOwner, save.AllowControl, save.TokensJson]).toEqual(['true', 'grinder', 'false', '{}']);
       expect(save.AllowNoPasswordWorkaround).toBeUndefined();
@@ -195,7 +195,7 @@ test('the diagnostics surface works without a deviceId at phone width', async ({
     TokensJson: JSON.stringify({a: {host: '192.168.1.40', token: 't'}, b: {host: '192.168.1.41', token: 'u'}})};
   await host.reload();
   await page.goto(`${origin}${base}/e64-diagnostics?ui=1&theme=light`);
-  await expect(page.getByRole('heading', {name: 'E64 diagnostics'})).toBeVisible();
+  await expect(page.getByRole('heading', {name: 'Grinder diagnostics'})).toBeVisible();
   const overflow = await page.evaluate(() => document.scrollingElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
   await page.getByRole('link', {name: /open/}).nth(1).click();

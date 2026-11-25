@@ -1503,7 +1503,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // --- Decaid grinder inventory -------------------------------------------
   // One Decaid grinder record per instance, so shots carry this grinder. The
   // user owns the record after creation: only plugin-owned extras change.
-  const PLUGIN_ID = "mahlkoenig-e64.reaplugin", DAY_MS = 86400000;
+  const PLUGIN_ID = "mahlkoenig-e64.reaplugin", PLUGIN_NAME = "Mahlkönig WebSocket grinders",
+    DEFAULT_INSTANCE_NAME = "Mahlkönig grinder", DAY_MS = 86400000;
   async function api(method, path, body) {
     const response = await fetch(DECAID_API + path, {method, ...(body === undefined ? {} : {headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)})});
     if (!response || !response.ok) throw new Error(path.split("?")[0] + " HTTP " + (response && response.status));
@@ -1689,7 +1690,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   function setupNotice(message) {
     try {
       if (message === null) host.dismissNotification("setup");
-      else host.notify({id: "setup", message: "Mahlkönig E64 needs setup: " + message + " Open Decaid > Settings > Plugins > Mahlkönig E64 > Set up."});
+      else host.notify({id: "setup", message: "Setup needed for " + PLUGIN_NAME + ": " + message + " Open Decaid > Settings > Plugins > " + PLUGIN_NAME + " > Set up."});
     } catch (_) {}
   }
   function validate(settings) {
@@ -1834,8 +1835,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     return {status: 400, payload: {error: "action"}};
   }
   function setupPage() {
-    return htmlPage("Set up the Mahlkönig E64", `
-<header class="pu-header"><h1>Set up the Mahlkönig E64</h1><button type="button" class="pu-btn pu-secondary" data-pu-done>Done</button></header>
+    return htmlPage("Set up " + PLUGIN_NAME, `
+<header class="pu-header"><h1>Set up ${PLUGIN_NAME}</h1><button type="button" class="pu-btn pu-secondary" data-pu-done>Done</button></header>
 <div class="pu-stepper" data-pu-stepper></div>
 <section data-pu-step>
   <h2>Before you start</h2>
@@ -1848,15 +1849,15 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     <input id="host" inputmode="url" autocomplete="off" spellcheck="false" placeholder="192.168.1.40">
     <p class="pu-hint">The grinder's IP address on your local network. Decaid cannot search the network for it yet.</p></div></div>
   <details class="pu-details"><summary>Advanced</summary><div class="pu-card">
-    <div class="pu-row"><label for="name">Name</label><input id="name" autocomplete="off" value="Mahlkönig E64"></div>
+    <div class="pu-row"><label for="name">Name</label><input id="name" autocomplete="off" value="${DEFAULT_INSTANCE_NAME}"></div>
     <div class="pu-row"><label for="port">WebSocket port</label><input id="port" inputmode="numeric" value="9997"></div>
     <div class="pu-row"><label for="restPort">Login port</label><input id="restPort" inputmode="numeric" value="443"></div></div></details>
   <div id="hostOut" class="pu-alert pu-error" hidden></div>
 </section>
 <section data-pu-step hidden>
   <h2>Trust the grinder's certificate</h2>
-  <div id="certOk" class="pu-alert pu-ok" hidden><span class="pu-pill pu-ok">Recognised</span> Standard Mahlkönig E64 certificate.</div>
-  <div id="certUnknown" class="pu-alert pu-warn" hidden><span class="pu-pill pu-warn">Check</span> This is not the usual E64 certificate. Continue only if you just set up this grinder or its firmware changed.</div>
+  <div id="certOk" class="pu-alert pu-ok" hidden><span class="pu-pill pu-ok">Recognised</span> Standard Mahlkönig certificate.</div>
+  <div id="certUnknown" class="pu-alert pu-warn" hidden><span class="pu-pill pu-warn">Check</span> This is not the usual Mahlkönig certificate. Continue only if you just set up this grinder or its firmware changed.</div>
   <code class="pu-code" id="fp"></code>
   <div class="pu-card" id="pasteCard" hidden><div class="pu-row"><label for="paste">Certificate SHA-256</label>
     <input id="paste" autocomplete="off" spellcheck="false" placeholder="91:B4:12:…" aria-describedby="pasteHint">
@@ -1918,7 +1919,7 @@ async function load() {
     if (rows[0]) {
       const row = rows[0];
       state.instanceId = row.id; state.previousHost = row.host;
-      $("host").value = row.host || ""; $("name").value = row.name || "Mahlkönig E64";
+      $("host").value = row.host || ""; $("name").value = row.name || "${DEFAULT_INSTANCE_NAME}";
       $("port").value = row.port || 9997; $("restPort").value = row.restPort || 443;
       if (row.certSha256) state.certSha256 = row.certSha256.replace(/:/g, "").toLowerCase();
     }
@@ -2003,7 +2004,7 @@ $("probe").addEventListener("click", async () => {
 function draft() {
   const owner = document.querySelector("input[name=owner]:checked").value;
   const t = target();
-  const instance = {id: state.instanceId, name: $("name").value.trim() || "Mahlkönig E64", scheme: "wss", host: t.host, port: t.port, restPort: t.restPort, pollMs: 1000, certSha256: state.certSha256};
+  const instance = {id: state.instanceId, name: $("name").value.trim() || "${DEFAULT_INSTANCE_NAME}", scheme: "wss", host: t.host, port: t.port, restPort: t.restPort, pollMs: 1000, certSha256: state.certSha256};
   const typed = $("password").value;
   const settings = {InstancesJson: JSON.stringify([instance]), TokensJson: "{}", MintTokens: "true",
     AdjustmentOwner: owner, PopulateGrinderRecord: String($("populate").checked), LinkWorkflowGrinder: String($("link").checked), RecordGrindDose: String($("recordDose").checked),
@@ -2069,7 +2070,7 @@ load();
       ? "<div class=\"pu-card\">" + registered.map((instance) => "<div class=\"pu-row\"><b>" + escapeHtml(instance.config.name) + "</b><a class=\"pu-btn pu-secondary\" href=\"?ui=1&amp;deviceId=" +
           escapeHtml(encodeURIComponent(instance.deviceId)) + escapeHtml(keep) + "\">" + (instance.connected ? "Connected" : "Not connected") + " – open</a></div>").join("") + "</div>"
       : "<div class=\"pu-alert pu-warn\">No grinder is set up yet.</div><div class=\"pu-actions\"><a class=\"pu-btn\" href=\"setup?" + escapeHtml(keep.slice(1)) + "\">Set up</a></div>";
-    return htmlPage("E64 diagnostics", "<header class=\"pu-header\"><h1>E64 diagnostics</h1><button type=\"button\" class=\"pu-btn pu-secondary\" data-pu-done>Done</button></header>" +
+    return htmlPage("Grinder diagnostics", "<header class=\"pu-header\"><h1>Grinder diagnostics</h1><button type=\"button\" class=\"pu-btn pu-secondary\" data-pu-done>Done</button></header>" +
       (registered.length ? "<p class=\"pu-muted\">Choose a grinder.</p>" : "") + body, "pu.init({fit: true});");
   }
   function diagnosticsPage(instance) {
@@ -2085,7 +2086,7 @@ load();
       ["Adjustment owner", instance.control.owner], ["Grind events", String(instance.grindEvents.length)],
       ["Dose recording", !instance.config.recordDose ? "off" : instance.workflow.lastDose ? instance.workflow.lastDose.status + (instance.workflow.lastDose.reason ? ": " + instance.workflow.lastDose.reason : "") : "on, no shot yet"]];
     const bundle = JSON.stringify(diagnosticsBundle(instance), null, 2);
-    return htmlPage("E64 diagnostics", "<header class=\"pu-header\"><h1>" + escapeHtml(instance.config.name) + "</h1><button type=\"button\" class=\"pu-btn pu-secondary\" data-pu-done>Done</button></header><div class=\"pu-card\">" +
+    return htmlPage("Grinder diagnostics", "<header class=\"pu-header\"><h1>" + escapeHtml(instance.config.name) + "</h1><button type=\"button\" class=\"pu-btn pu-secondary\" data-pu-done>Done</button></header><div class=\"pu-card\">" +
       rows.map(([k, v]) => "<div class=\"pu-row\"><b>" + escapeHtml(k) + "</b><span>" + escapeHtml(v) + "</span></div>").join("") + "</div>" +
       "<details class=\"pu-details\"><summary>Diagnostics bundle for a bug report</summary><p class=\"pu-hint\">Contains no token, no password, no auth header and no certificate body. Attach this to the bug report.</p><code class=\"pu-code\">" +
       escapeHtml(bundle) + "</code></details>", "pu.init({fit: true});");

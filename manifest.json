@@ -1,8 +1,8 @@
 {
   "id": "mahlkoenig-e64.reaplugin",
-  "name": "Mahlkönig E64",
+  "name": "Mahlkönig WebSocket grinders",
   "author": "Decaid contributors",
-  "description": "Read-only Mahlkönig E64 grinder telemetry over WebSocket.",
+  "description": "Read-only Mahlkönig grinder telemetry over the local JSON WebSocket API. Only the E64 WS is tested; the E64 TS and NG2 GbS models are untested.",
   "version": "0.7.6",
   "apiVersion": 1,
   "permissions": [
@@ -24,7 +24,7 @@
           "id": "diagnostics",
           "role": "diagnostics",
           "endpoint": "e64-diagnostics",
-          "label": "E64 diagnostics"
+          "label": "Grinder diagnostics"
         }
       ]
     },
@@ -48,7 +48,7 @@
           "id": "diagnostics",
           "role": "diagnostics",
           "endpoint": "e64-diagnostics",
-          "label": "E64 diagnostics"
+          "label": "Grinder diagnostics"
         }
       ]
     }
@@ -64,20 +64,20 @@
       "id": "diagnostics",
       "role": "diagnostics",
       "endpoint": "e64-diagnostics",
-      "label": "E64 diagnostics"
+      "label": "Grinder diagnostics"
     }
   ],
   "settings": {
     "InstancesJson": {
       "type": "string",
-      "label": "E64 instances",
-      "description": "JSON array of id, name, host, port, optional scheme (wss by default, ws allowed), optional pollMs, optional certSha256 (pinned SHA-256 of the E64 certificate) and optional restPort (login HTTPS port, default 443). Hosts must be loopback, private, link-local or .local.",
+      "label": "Grinder instances",
+      "description": "JSON array of id, name, host, port, optional scheme (wss by default, ws allowed), optional pollMs, optional certSha256 (pinned SHA-256 of the grinder certificate) and optional restPort (login HTTPS port, default 443). Hosts must be loopback, private, link-local or .local.",
       "default": "[]",
       "hidden": true
     },
     "TokensJson": {
       "type": "string",
-      "label": "E64 session tokens",
+      "label": "Grinder session tokens",
       "description": "JSON object mapping instance ids to {\"host\": <instance host>, \"token\": <token>}. An entry is only used while the instance host matches.",
       "secure": true,
       "default": "{}",
@@ -115,7 +115,7 @@
     },
     "PasswordsJson": {
       "type": "string",
-      "label": "E64 Owner passwords",
+      "label": "Grinder Owner passwords",
       "description": "JSON object mapping instance ids to {\"host\": <instance host>, \"password\": <Owner password>}. Stored as a secure setting and never logged; re-enter it after changing the instance host.",
       "secure": true,
       "default": "{}",
