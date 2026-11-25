@@ -725,10 +725,12 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       return "error";
     }
   }
-  // Machine logs (download_machine_logs ZIP): after completed grinds, coalesced to
-  // at most one download per 10 minutes, plus one idle refresh per 6 hours for
-  // the service log. Three failures in a row suspend downloads until the next
-  // connect. Only the parsed, bounded rows are kept; the ZIP and CSV are dropped.
+  // Machine logs (Local API v1 when configured, otherwise the download_machine_logs
+  // ZIP): after completed grinds, coalesced to at most one download per 10 minutes,
+  // plus one idle refresh per 6 hours for the service log. Three failures in a row
+  // suspend downloads, which then probe once per idle refresh and recover on the
+  // first success. Only the parsed, bounded rows are kept; ZIP and CSV are dropped.
+  //
   // A stalled socket must never pin the log at "downloading": the request races a
   // bounded deadline so the finally block always reschedules. QuickJS has no
   // AbortController, so the deadline is a timer race that also aborts the socket
@@ -737,7 +739,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const controller = typeof AbortController === "function" ? new AbortController() : null;
     let timer = null;
     const pending = Promise.resolve().then(() => fetch(url, controller ? {...init, signal: controller.signal} : init));
-    const deadline = new Promise((resolve, reject) => {
+    const deadline = new Promise((_, reject) => {
       timer = setTimeout(() => {
         if (controller) { try { controller.abort(); } catch (error) {} }
         reject(new Error(label + " timeout"));
