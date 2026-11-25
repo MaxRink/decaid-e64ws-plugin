@@ -820,13 +820,14 @@ async function logHarness({zip, failDownloads = false, binary = true, refuse = (
   const pending = new Map(); let nextTimer = 0;
   const timers = {setTimeout: (callback, delay) => {const id = ++nextTimer; pending.set(id, {callback, delay, at: now + delay}); return id;}, clearTimeout: id => pending.delete(id), Date: FakeDate};
   const calls = [];
+  const failing = () => typeof failDownloads === 'function' ? failDownloads() : failDownloads;
   const fetchImpl = async (url, init) => {
     calls.push({url, init});
     if (hang(url, init)) return new Promise(() => {});
     const custom = route(url, init);
     if (custom) return custom;
     if (url.endsWith('/login')) return {ok: true, status: 200, headers: {get: (name) => name === 'authorization' ? `Bearer t${calls.length}` : 'PHPSESSID=abc; path=/'}, text: async () => ''};
-    if (failDownloads) return {ok: false, status: 503, headers: {get: () => null}, base64: async () => ''};
+    if (failing()) return {ok: false, status: 503, headers: {get: () => null}, base64: async () => ''};
     if (refuse(init)) return {ok: false, status: 400, headers: {get: () => null}, base64: async () => ''};
     if (/\/rest_api\/(grind_log|service_log)$/.test(url)) return localJson({success: true, data: {rows: []}});
     return {ok: true, status: 200, headers: {get: () => null}, ...(binary ? {base64: async () => zip.toString('base64')} : {})};
@@ -981,6 +982,54 @@ test('a log request that never resolves cannot leave the log downloading', async
   assert.equal(localLog.failures, 1);
   assert.equal(localLog.lastError, 'local api timeout');
   await local.loaded.plugin.onUnload();
+});
+
+test('a Local API failure still tries the vendor ZIP once before counting a failure', async () => {
+  const zip = zipOf([{name: 'HemroE64WSServiceLogs_SN1_x.csv', data: [serviceHeader, '1,1,PowerOn,2026-11-23 11:00:00,Firmware started'].join('\n'), method: 8}]);
+  const h = await logHarness({zip, apiToken: 'owner-token',
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'token rejected'}, 401) : null});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 1, 'the Local API is asked first');
+  assert.equal(h.downloads(), 1, 'the vendor ZIP is tried once after the Local API refused');
+  const log = h.events().log;
+  assert.equal(log.status, 'ok', 'the fallback succeeded');
+  assert.equal(log.failures, 0, 'a successful fallback is not a failure');
+  assert.equal(JSON.parse(h.service().body).rows.length, 1, 'the fallback still fills the service log');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a Local API and ZIP failure together count one failure', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'nope'}, 401) : null});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 1);
+  assert.equal(h.downloads(), 1, 'the ZIP is still tried');
+  const log = h.events().log;
+  assert.equal(log.failures, 1, 'one attempt is one failure, not two');
+  assert.equal(log.status, 'failed');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a suspended log recovers on a later successful attempt', async () => {
+  let failing = true;
+  const zip = zipOf([{name: 'HemroE64WSServiceLogs_SN1_x.csv', data: [serviceHeader, '1,1,PowerOn,2026-11-23 11:00:00,Firmware started'].join('\n'), method: 8}]);
+  const h = await logHarness({zip, failDownloads: () => failing});
+  await h.connect();
+  for (let i = 0; i < 3; i++) { await h.grind(); await h.advance(10 * 60000); }
+  assert.equal(h.events().log.failures, 3);
+  assert.equal(h.events().log.status, 'suspended');
+  const before = h.downloads();
+  failing = false;
+  await h.grind();
+  assert.equal(h.downloads(), before, 'a suspended log is not retried on every grind');
+  await h.advance(6 * 3600000);
+  assert.equal(h.downloads(), before + 1, 'the suspended log probes once per idle refresh');
+  const log = h.events().log;
+  assert.equal(log.status, 'ok', 'a success lifts the suspension without a new connection');
+  assert.equal(log.failures, 0, 'a successful request resets the counter');
+  await h.loaded.plugin.onUnload();
 });
 
 async function inventoryRun({decaid = decaidApi(), extra = {}, grinderType = 'E64 WS', connects = 1} = {}) {

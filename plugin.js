@@ -744,8 +744,11 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   }
   function queueLogDownload(instance, delayMs) {
     const log = instance.grindLog;
-    if (!instance.connected || !instance.config.mintTokens || log.status === "unsupported-host" || log.status === "suspended") return;
-    const due = Math.max(Date.now() + delayMs, log.nextAt === null ? 0 : log.nextAt);
+    if (!instance.connected || !instance.config.mintTokens || log.status === "unsupported-host") return;
+    // A suspension is not fatal: it only stretches the next attempt to the idle
+    // refresh, so one success can reset the counter without a new connection.
+    const wait = log.status === "suspended" ? Math.max(delayMs, LOG_IDLE_REFRESH_MS) : delayMs;
+    const due = Math.max(Date.now() + wait, log.nextAt === null ? 0 : log.nextAt);
     if (instance.logTimer !== null && log.dueAt !== null && log.dueAt <= due) return;
     if (instance.logTimer !== null) clearTimeout(instance.logTimer);
     log.dueAt = due;
@@ -757,53 +760,66 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   }
   async function downloadLogs(instance) {
     const log = instance.grindLog, config = instance.config, epoch = instance.epoch;
-    if (!instance.connected || log.status === "unsupported-host" || log.status === "suspended") return;
+    if (!instance.connected || log.status === "unsupported-host") return;
     log.status = "downloading"; log.lastAttemptAt = new Date().toISOString(); log.nextAt = Date.now() + LOG_MIN_INTERVAL_MS;
+    // Declared outside the try: the catch block reports it when the ZIP fails too.
+    let localError = null;
     try {
-      // Try Local API v1 first if configured
+      // The Local API is preferred, but a refusal there is not a dead end: the
+      // vendor ZIP still gets one attempt before the attempt counts as a failure.
       if (hasLocalApi(config)) {
-        await downloadLogsLocalApi(instance);
-        Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0});
-        return;
-      }
-      // Fall back to vendor download_machine_logs ZIP
-      // Reuse the connection's Owner session; log in again only when it was refused.
-      const fetchZip = () => fetchLogRequest(restUrl(config, "download_machine_logs"), {
-        method: "POST", body: "{}", responseType: "base64",
-        headers: {"Content-Type": "application/json", Authorization: "Bearer " + instance.restToken, ...(instance.restCookie ? {Cookie: "PHPSESSID=" + instance.restCookie} : {})},
-        ...(config.certSha256 ? {tlsPinSha256: config.certSha256} : {})
-      }, "grind log");
-      let response = instance.restToken ? await fetchZip() : null;
-      if (!response || (!response.ok && response.status >= 400 && response.status < 500)) {
-        await mintToken(instance);
-        response = await fetchZip();
-      }
-      if (!response || typeof response.base64 !== "function") { log.status = "unsupported-host"; return; }
-      if (!response.ok) throw new Error("grind log HTTP " + response.status);
-      const bytes = fromBase64(await response.base64());
-      const grindCsv = readZip(bytes, (name) => /GrindLogs[^/]*\.csv$/i.test(name), MAX_LOG_BYTES);
-      const serviceCsv = readZip(bytes, (name) => /ServiceLogs[^/]*\.csv$/i.test(name), MAX_LOG_BYTES);
-      if (!grindCsv && !serviceCsv) throw new Error("grind log CSV missing");
-      if (grindCsv) {
-        const rows = grindRows(utf8(grindCsv));
-        for (const grind of instance.grindEvents) {
-          if (grind.grindUuid) continue;
-          const row = matchGrindRow(instance, grind, rows);
-          if (!row) continue;
-          applyGrindRow(grind, row);
-          // The log usually arrives after the shot: complete the shot's grind block then.
-          if (grind.doseShot) writeShotGrind(grind, false).catch(() => {});
+        try {
+          await downloadLogsLocalApi(instance);
+          Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0});
+          return;
+        } catch (error) {
+          localError = error;
         }
       }
-      if (serviceCsv) mergeServiceRows(instance, utf8(serviceCsv));
+      if (!await downloadLogsZip(instance, config)) { log.status = "unsupported-host"; return; }
       Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0});
     } catch (error) {
       log.failures++;
+      const cause = localError || error;
       Object.assign(log, {status: log.failures >= LOG_MAX_FAILURES ? "suspended" : "failed",
-        lastError: error && /^(grind log|no matching|zip|inflate|login|local api)/.test(error.message) ? error.message : "grind log download failed"});
+        lastError: cause && /^(grind log|no matching|zip|inflate|login|local api)/.test(cause.message) ? cause.message : "grind log download failed"});
     } finally {
       if (instance.epoch === epoch) queueLogDownload(instance, LOG_IDLE_REFRESH_MS);
     }
+  }
+  // The vendor ZIP path. Returns false when the host cannot serve ZIPs at all,
+  // which is a permanent per-host condition rather than a failure.
+  async function downloadLogsZip(instance, config) {
+    // Reuse the connection's Owner session; log in again only when it was refused.
+    const fetchZip = () => fetchLogRequest(restUrl(config, "download_machine_logs"), {
+      method: "POST", body: "{}", responseType: "base64",
+      headers: {"Content-Type": "application/json", Authorization: "Bearer " + instance.restToken, ...(instance.restCookie ? {Cookie: "PHPSESSID=" + instance.restCookie} : {})},
+      ...(config.certSha256 ? {tlsPinSha256: config.certSha256} : {})
+    }, "grind log");
+    let response = instance.restToken ? await fetchZip() : null;
+    if (!response || (!response.ok && response.status >= 400 && response.status < 500)) {
+      await mintToken(instance);
+      response = await fetchZip();
+    }
+    if (!response || typeof response.base64 !== "function") return false;
+    if (!response.ok) throw new Error("grind log HTTP " + response.status);
+    const bytes = fromBase64(await response.base64());
+    const grindCsv = readZip(bytes, (name) => /GrindLogs[^/]*\.csv$/i.test(name), MAX_LOG_BYTES);
+    const serviceCsv = readZip(bytes, (name) => /ServiceLogs[^/]*\.csv$/i.test(name), MAX_LOG_BYTES);
+    if (!grindCsv && !serviceCsv) throw new Error("grind log CSV missing");
+    if (grindCsv) {
+      const rows = grindRows(utf8(grindCsv));
+      for (const grind of instance.grindEvents) {
+        if (grind.grindUuid) continue;
+        const row = matchGrindRow(instance, grind, rows);
+        if (!row) continue;
+        applyGrindRow(grind, row);
+        // The log usually arrives after the shot: complete the shot's grind block then.
+        if (grind.doseShot) writeShotGrind(grind, false).catch(() => {});
+      }
+    }
+    if (serviceCsv) mergeServiceRows(instance, utf8(serviceCsv));
+    return true;
   }
   async function downloadLogsLocalApi(instance) {
     const config = instance.config;

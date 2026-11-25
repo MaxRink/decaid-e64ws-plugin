@@ -157,10 +157,15 @@ WAL, so downloads are deliberately rare:
   between wait for the next download and are matched together;
 - otherwise one refresh per 6 hours while connected (the first one 60 s after
   connecting when none ran in the last 6 hours);
-- a failed attempt also waits 10 minutes, and three failures in a row stop
-  downloads until the next successful connection;
+- a failed attempt also waits 10 minutes; three failures in a row mark the log
+  `suspended`, which only stretches the next attempt to the 6-hour idle refresh,
+  so one later success resets the counter without reconnecting;
 - every log request is abandoned after 20 s, so a stalled socket cannot leave
   the status at `downloading` or skip the next scheduled attempt.
+
+When the Local API is enabled it is tried first; if it fails, the vendor ZIP
+still gets one attempt before the download counts as a failure, and the Local
+API reason is the one reported in `lastError`.
 
 Downloads reuse the Owner session the plugin already opened to mint the
 connection's WebSocket token. Only when the grinder refuses that session does
