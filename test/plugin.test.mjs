@@ -1137,6 +1137,80 @@ test('a rejected log download is caught instead of left as an unhandled rejectio
   }
 });
 
+test('the Local API fills the grind log and the service log from its two routes', async () => {
+  const at = Date.parse('2026-11-23T12:00:00Z');
+  const grindRows = [
+    {grind_id: 2, grind_uuid: 'local-uuid', grind_date_time: stampAt(at), grind_ddd: 819, grind_duration: 8300, grind_weight: 18070,
+      grind_successfull: 1, grind_trigger: 'GrindByWeight', recipe_index: 1, recipe_uuid: 'r1', recipe_mode: 'GbW', recipe_type: 'Espresso',
+      recipe_amount: 18000, recipe_coarseness: 500, recipe_brew_time: 27000, recipe_brew_weight: 36000, recipe_icon: 'espresso', recipe_gbs_enabled: 1},
+    {grind_id: 3, grind_uuid: 'other-dose', grind_date_time: stampAt(at), grind_ddd: 820, grind_duration: 8000, grind_weight: 20100,
+      grind_successfull: 1, recipe_amount: 20000}];
+  const serviceRows = [
+    {event_id: 1, event_type_id: 7, event_type: 'PowerOn', event_date_time: '2026-11-23 11:00:00', event_details: 'Firmware V01.16 started'},
+    {event_id: 2, event_type_id: 8, event_type: 'WifiConnected', event_date_time: '2026-11-23 11:00:05',
+      event_details: 'SSID HomeNet ip 192.168.1.23 mac aa:bb:cc:dd:ee:ff password=hunter2'}];
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', route: (url) => {
+    if (url.endsWith('/rest_api/grind_log')) return localJson({success: true, data: {rows: grindRows}});
+    if (url.endsWith('/rest_api/service_log')) return localJson({success: true, data: {rows: serviceRows}});
+    return null;
+  }});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.downloads(), 0, 'the vendor ZIP is not used when the Local API answers');
+  const [grindCall] = h.localCalls('grind_log');
+  assert.equal(grindCall.url, 'https://127.0.0.1:8443/rest_api/grind_log');
+  assert.equal(grindCall.init.method, 'POST');
+  assert.equal(grindCall.init.headers['X-E64-Local-Token'], 'owner-token');
+  assert.equal(grindCall.init.headers.Cookie, 'PHPSESSID=abc');
+  assert.deepEqual(JSON.parse(grindCall.init.body), {limit: 5000});
+  assert.deepEqual(JSON.parse(h.localCalls('service_log')[0].init.body), {limit: 500});
+  const [event] = h.events().events;
+  assert.equal(event.grindUuid, 'local-uuid', 'the target weight rules out the 20 g row');
+  assert.equal(event.trigger, 'GrindByWeight');
+  assert.deepEqual(event.log, {grindWeightGr: 18.07, grindDurationMs: 8300, setting: '82', successful: true});
+  assert.deepEqual(event.recipe, {index: 1, uuid: 'r1', mode: 'GbW', type: 'Espresso', amountGr: 18, setting: '50',
+    brewTimeMs: 27000, brewWeightGr: 36, icon: 'espresso', gbsEnabled: true});
+  const service = JSON.parse(h.service().body);
+  assert.deepEqual(service.rows.map((row) => [row.id, row.eventType]), [[1, 'PowerOn'], [2, 'WifiConnected']]);
+  assert.equal(service.rows[1].details, 'SSID <redacted> ip <ip> mac <mac> password=<redacted>');
+  const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
+  const html = await h.loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {...query, ui: '1'}});
+  assert.equal(html.body.includes('owner-token'), false, 'the Local API token never reaches the page');
+  assert.equal(JSON.stringify(h.events()).includes('owner-token'), false, 'nor the log payload');
+  assert.equal(JSON.stringify(await h.loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query})).includes('owner-token'), false,
+    'nor the diagnostics JSON');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a Local API payload error names its route, is sanitised and still falls back', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true, route: (url) => {
+    if (url.endsWith('/rest_api/grind_log')) return localJson({success: true, data: {rows: []}});
+    if (url.endsWith('/rest_api/service_log')) return localJson({success: false, error: 'table locked\nby writer'});
+    return null;
+  }});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 1);
+  assert.equal(h.localCalls('service_log').length, 1);
+  assert.equal(h.downloads(), 1, 'the ZIP is still tried once after a payload error');
+  const log = h.events().log;
+  assert.equal(log.lastError, 'local api service_log: table locked by writer', 'newlines collapsed');
+  assert.equal(log.failures, 1);
+  assert.equal(log.status, 'failed');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a Local API error body that is not an object is reported without throwing', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson(null) : null});
+  await h.connect();
+  await h.grind();
+  const log = h.events().log;
+  assert.equal(log.lastError, 'local api grind_log: invalid response');
+  assert.equal(log.failures, 1);
+  await h.loaded.plugin.onUnload();
+});
+
 async function inventoryRun({decaid = decaidApi(), extra = {}, grinderType = 'E64 WS', connects = 1} = {}) {
   const fetchImpl = hostFetch([], decaid);
   const fixture = {sent: [], events: []};
