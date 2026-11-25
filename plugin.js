@@ -24,7 +24,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // its SQLite WAL, so downloads are rare and bounded.
   const LOG_MIN_INTERVAL_MS = 10 * 60000, LOG_IDLE_REFRESH_MS = 6 * 3600000, LOG_CONNECT_DELAY_MS = 60000,
     LOG_MAX_FAILURES = 3, LOG_REQUEST_TIMEOUT_MS = 20000, LOG_RETRY_AFTER_MAX_MS = 3600000, LOCAL_API_ERROR_MAX = 120,
-    MAX_SERVICE_ROWS = 500;
+    LOG_ERROR_MAX = 160, MAX_SERVICE_ROWS = 500;
   // Local API v1: owner-authorized read-only endpoints on dev-mode devices
   // The plugin only ever reads two of these: grind_log and service_log.
   const LOCAL_API_STATUS = {401: "unauthorized", 403: "forbidden", 409: "conflict", 422: "unprocessable", 429: "rate-limited", 503: "unavailable"};
@@ -809,7 +809,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   function logErrorMessage(error) {
     const message = error && typeof error.message === "string" ? error.message : "";
     return /^(grind log|no matching|zip|inflate|login|local api)/.test(message)
-      ? message.slice(0, LOCAL_API_ERROR_MAX + 64) : "grind log download failed";
+      ? message.slice(0, LOG_ERROR_MAX) : "grind log download failed";
   }
   // Device error text is free-form free text: collapse control characters, cap it
   // and redact identifiers and secrets before it is appended to a fixed prefix.
