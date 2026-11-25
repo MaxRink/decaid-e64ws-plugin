@@ -69,12 +69,24 @@ the NG2 GbS models. Three surfaces say so next to the name:
 - the unchanged compatibility table, where every untested and incompatible row
   keeps its wording.
 
-**The known cost.** EK Omnia also runs a WebSocket server — a file service on
-9988, with no JSON API on 9997 and no PHP web app. Read literally, "WebSocket"
-could include it. The mitigations are that the description says *JSON*
-WebSocket API, and that the table's EK Omnia row still reads "Not compatible".
-If the owner prefers a name with no false inclusion at all, the precise choice
-is `Mahlkönig HSG/NG2 grinders`; it was rejected above on readability alone.
+**The known cost, stated plainly.** EK Omnia is *not* excluded by having no
+socket. It runs `EkxWsServer` and serves a WebSocket file service on **9988**;
+what it lacks is a JSON grinder API — no JSON WSS commands on 9997, no PHP web
+app, no login and token flow, so the plugin cannot talk to it. The bare word
+"WebSocket" therefore does include EK Omnia, and this name is broader than the
+code on its own.
+
+What actually excludes it is the qualifier, not the noun: the manifest
+description says *JSON* WebSocket API, and the plugin's first requirement is
+that API on 9997. The table's EK Omnia row keeps its own "Not compatible"
+wording, so a reader who starts from the name and checks the table gets the
+correct answer. Nothing here relies on the claim that EK Omnia has no socket.
+
+If the owner prefers a name with no false inclusion at all — one whose wording
+is as narrow as the code — the precise choice is `Mahlkönig HSG/NG2 grinders`:
+it names exactly the two firmware lines in scope, excludes EK Omnia by
+construction rather than by qualifier, and was rejected above on readability
+alone, not on accuracy.
 
 ## Display surfaces changed in this rename
 
