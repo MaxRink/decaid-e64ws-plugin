@@ -27,8 +27,11 @@ openssl s_client -connect <grinder-ip>:443 </dev/null 2>/dev/null \
   | openssl x509 -noout -fingerprint -sha256
 ```
 
-Use the value after `sha256 Fingerprint=`. Colons are allowed and case does not
-matter. Port 9997 serves the same certificate. Example only; use the value from
+Use the value after `sha256 Fingerprint=`. Colons, spaces and hyphens between
+the bytes are allowed and case does not matter; a `-sha1` value is rejected
+with a message saying so, because only a SHA-256 can match. Anything that is not
+64 hex characters is refused with the reason instead of being repaired. Port
+9997 serves the same certificate. Example only; use the value from
 your own grinder:
 
 ```json
@@ -47,7 +50,11 @@ or `.local` addresses, and secure entries are bound to that host.
 
 A Decaid host without pinning support ignores `tlsPinSha256` and falls back to
 platform validation, which fails for the self-signed certificate. Use one of
-the options below there.
+the options below there. The setup assistant proves which case you are in: it
+probes with a pin that cannot match any certificate, so a host that accepts the
+probe is reported as `pin-unsupported` instead of naming a fingerprint it never
+verified. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for the stage-by-stage
+messages.
 
 ## Alternatives on an owner-controlled LAN
 

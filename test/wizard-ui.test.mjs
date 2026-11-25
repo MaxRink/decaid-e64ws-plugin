@@ -11,7 +11,10 @@ const FLEET = '91b412ee014f21c3bb2445430b6a3d77903334a1300ad84f1980ab2c5f53620b'
 const base = '/api/v1/plugins/mahlkoenig-e64.reaplugin';
 
 // The grinder as plugin fetch sees it: the fleet certificate and Owner password "right".
+// `grinderOffline` makes it refuse the TCP connection instead, for the reachability test.
+let grinderOffline = false;
 async function grinderFetch(url, init = {}) {
+  if (grinderOffline) throw new Error('connect ECONNREFUSED 192.168.1.40:443');
   if (init.tlsPinSha256 !== FLEET) throw new Error('HandshakeException');
   if (url.endsWith('/rest_api/ping')) return {ok: true, status: 200, headers: {get: () => null}, text: async () => 'expired'};
   const ok = JSON.parse(init.body || '{}').password === 'right';
@@ -91,7 +94,7 @@ for (const theme of ['light', 'dark']) {
       await next.click();
       await page.locator('#password').fill('wrong');
       await page.locator('#test').click();
-      await expect(page.locator('#pwOut')).toContainText('did not accept');
+      await expect(page.locator('#pwOut')).toContainText('refused this login with HTTP 400');
       await page.waitForTimeout(3100);
       await page.locator('#password').fill('right');
       await page.locator('#test').click();
@@ -120,6 +123,23 @@ for (const theme of ['light', 'dark']) {
     });
   }
 }
+
+test('an unreachable grinder stops the assistant and says why', async ({page}) => {
+  host.store.settings = {}; host.store.saves.length = 0; await host.reload();
+  grinderOffline = true;
+  try {
+    await page.goto(`${origin}${base}/setup`);
+    const next = page.locator('[data-pu-next]');
+    await next.click();
+    await page.locator('#host').fill('192.168.1.40');
+    await next.click();
+    // The reason is the refused connection, not "this is not an E64 certificate".
+    await expect(page.locator('#certOut')).toContainText('192.168.1.40:443');
+    await expect(page.locator('#certOut')).toContainText('refused the TCP connection');
+    await expect(page.getByRole('heading', {name: 'Trust the grinder\'s certificate'})).toHaveCount(0);
+    expect(await page.evaluate(() => document.querySelectorAll('[data-pu-step]:not([hidden]) h2')[0].textContent)).toContain('Find your grinder');
+  } finally { grinderOffline = false; }
+});
 
 test('reopening keeps the saved password and asks again when the address changes', async ({page}) => {
   host.store.settings = {InstancesJson: JSON.stringify([{id: 'e64', name: 'E64', scheme: 'wss', host: '192.168.1.40', port: 9997, restPort: 443, pollMs: 1000, certSha256: FLEET}]),

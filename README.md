@@ -346,7 +346,8 @@ combined with the private-host restriction above. Do not install the
 certificate as a trusted root. Login always uses HTTPS on port 443, the only
 E64 REST listener (HTTP 80 redirects), whatever the WebSocket `scheme`. See
 [docs/CERTIFICATE_TRUST.md](docs/CERTIFICATE_TRUST.md) for pinned and
-owner-LAN options.
+owner-LAN options, and
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) when a connect fails.
 
 A clean Owner-password login was confirmed on 2026-11-18. The live unit served
 `ddValueDum=854` in the first session and `817` in a later clean-token session
@@ -358,11 +359,22 @@ A failed login backs off before the next attempt: 5 s, doubling per failure
 up to 5 min, reset by a successful login. A connect inside the backoff window
 fails with `login backoff` without contacting the grinder.
 `GET <diagnostics>?read=connection` reports `connected`, `tokenSource`,
-`lastMintAt`, `lastMintError`, `mintBackoffUntil`, `staticToken` and
-`mintTokens`; it never returns the token or password. `lastMintError` is a
-fixed category (`login HTTP <status>`, `login returned no bearer token` or
-`login request failed`) and never echoes device response text. Static `TokensJson` values are reused, so a static token
+`lastMintAt`, `lastMintError`, `lastMintDiagnosis`, `diagnosis`,
+`mintBackoffUntil`, `staticToken` and `mintTokens`; it never returns the token or
+password. `lastMintError` is a fixed category (`login HTTP <status>` or
+`login <stage>`) and never echoes device response text; `lastMintDiagnosis` is
+the full sentence naming the stage, the expected value, what was observed and
+one next step. Static `TokensJson` values are reused, so a static token
 must be refreshed manually after a single-connection close.
+
+A failed connect never reports a single catch-all. The stage is one of `dns`,
+`refused`, `unreachable`, `timeout`, `tls`, `certificate`, `fingerprint`,
+`upgrade`, `auth` or `protocol`; the message carries the host's own error text
+and code after redaction, the expected value (including the pinned fingerprint
+in colon form) and one next step, and the same failure appears as a
+notification that the next successful connect withdraws.
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) maps each stage to a cause
+and a remedy.
 
 ## Local API v1 (dev-mode devices)
 
@@ -555,7 +567,17 @@ exact installed source revision before these checks count as verified evidence.
 ## Diagnostics and errors
 
 The diagnostics surface accepts `GET` with the host `deviceId`. The supported
-`read` values are none, `config`, `machineInfo`, `connection`, `control`, `inventory` and `xenia`.
+`read` values are none, `config`, `machineInfo`, `connection`, `control`,
+`inventory`, `xenia`, `diagnostics` and `stages`.
+
+`read=diagnostics` returns the bundle to attach to a bug report: plugin version,
+platform, endpoint host and ports, the TLS/pin summary (expected fingerprint,
+whether the host confirmed it, and the exact comparison the host performs), the
+staged connect steps with timings, and the error class. It is also shown in the
+`?ui=1` page. The bundle never contains a token, an Owner password, an auth
+header or a certificate body. `read=stages` returns the staged log lines;
+`&verbose=1` (or `"DebugLog": "true"` in the settings) adds the underlying error
+message and code, still redacted.
 With no `read` parameter it returns last-known observations, including the
 latest polled `state`, which may remain available after disconnection; there is
 no separate `read=state`. Reconnecting starts a fresh observation set.
