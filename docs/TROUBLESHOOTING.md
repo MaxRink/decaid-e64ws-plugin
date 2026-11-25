@@ -258,10 +258,9 @@ and code for the last failure. Tokens, Owner passwords, auth headers and
 certificate bodies are removed at both levels.
 
 For a persistent verbose log, switch on **Verbose connection diagnostics**
-(`DebugLog`, hidden among the advanced settings, Off by default) and reload. It
-is declared in the manifest, so the host saves it; any value other than
-`true`/`false` is refused at load. Use `&verbose=1` when you want one request
-verbose without changing a setting.
+(`DebugLog`, off by default) and reload. It is declared in the manifest, so the
+host can save it; any value other than `true`/`false` is refused at load. Use
+`&verbose=1` when you want one request verbose without changing a setting.
 
 ## Attach the diagnostics bundle
 

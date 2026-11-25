@@ -2056,21 +2056,26 @@ test('a 100 kB device error cannot inflate the message, the notification or the 
   await loginPlugin.onUnload();
 });
 
-test('the manifest declares every setting the code reads, so the host can save it', () => {
+test('the manifest declares every setting the code reads, with the typing the host stores', () => {
   const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
   // Declaring the Local API keys belongs to the Local API change (#17/#18); this
-  // test enforces every other key the code parses as JSON text.
+  // test covers every other key the code parses as JSON text.
   const pendingLocalApi = ['ApiTokensJson', 'UseLocalApi'];
   const read = [...new Set([...source.matchAll(/jsonSetting\(settings, "([A-Za-z][A-Za-z0-9]*)"/g)].map((match) => match[1]))];
   assert.ok(read.includes('DebugLog'), 'the code reads DebugLog');
   for (const key of read) {
     if (pendingLocalApi.includes(key) && !manifest.settings[key]) continue;
     assert.ok(manifest.settings[key], key + ' is declared in the manifest, so the host can save it');
+    assert.equal(typeof manifest.settings[key].type, 'string', key + ' declares the type the host validates');
   }
+  // secure-versus-plain typing: credentials are stored as secure settings, a log
+  // switch is not one. Display hints are deliberately not asserted.
+  for (const key of ['TokensJson', 'PasswordsJson']) assert.equal(manifest.settings[key].secure, true, key + ' is a secure setting');
   const debugLog = manifest.settings.DebugLog;
   assert.equal(debugLog.type, 'enum', 'jsonSetting parses JSON text, so the switch is an enum of strings');
   assert.deepEqual(debugLog.values, ['false', 'true']);
   assert.equal(debugLog.default, 'false', 'verbose diagnostics stay off unless the user turns them on');
+  assert.equal(debugLog.secure, undefined, 'a diagnostics switch is not a secret');
 });
 
 test('a certificate failure says verification failed instead of claiming it never ran', async () => {
