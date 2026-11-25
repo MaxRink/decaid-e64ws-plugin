@@ -120,9 +120,14 @@ entered and confirmed twice), the Owner password with a test login (at most one
 attempt every 3 s, nothing stored until you save), how Decaid and the grinder
 work together, optional grinder control, and a review. Saving writes the
 existing settings once through Decaid's settings route and then shows the live
-status. The raw JSON settings are hidden from Decaid's settings form; the
-no-password workaround stays available as an advanced setting and is not offered
-by the assistant. Decaid has no network search for plugins yet, so the address
+status. Every setting `manifest.json` declares appears in Decaid's single plugin
+settings dialog - one flat list, with no separate hidden or advanced section - so
+`InstancesJson`, `TokensJson`, `PasswordsJson` and the toggles are all listed
+there. The raw JSON settings are still strings you paste, and the secure ones
+(`TokensJson` and `PasswordsJson` today) go to Decaid's credential store: the
+settings endpoint returns only `{"isSet": true}` for them and never the values.
+The no-password workaround stays available as a setting and is not offered by the
+assistant. Decaid has no network search for plugins yet, so the address
 is entered by hand. `GET <diagnostics>?ui=1` shows the diagnostics as a page. Without a `deviceId`
 (as the plugin-level diagnostics surface opens it) a single instance is shown
 directly; with several the page offers a picker, and a JSON request gets `400`
@@ -399,6 +404,19 @@ CI checks Node 22/24/26 and validates the repository root, generated local ZIP,
 and GitHub source archive against upstream Decaid `main` using Flutter 3.47.9,
 the version Decaid's own CI pins; the Linux app smoke pins upstream main `1d74fbf7` with Flutter 3.47.9,
 the first pinned host that accepts the `notifications` permission.
+
+### Verify host behaviour against a pinned ref
+
+What the host does - in code, tests, docs or a review - has to be checked against
+a ref this repository pins in `.github/workflows/ci.yml` (`1d74fbf7`, and
+`a0dede24` for the app test) or against `decentespresso/decaid` `main`, never
+against whichever branch happens to be checked out. A local branch that is ahead
+of `main` can carry unmerged behaviour no shipping host has: that is how the
+plugin settings dialog once got documented as honouring `hidden` and `advanced`
+when neither key appears anywhere in the host sources at those refs, and the
+dialog in fact maps every declared setting into one flat form.
+`git merge-base --is-ancestor <commit> origin/main` settles whether something you
+read from a checkout ships.
 
 ## Simulator end-to-end tests
 

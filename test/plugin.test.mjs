@@ -1288,9 +1288,29 @@ test('setup probes the certificate and tests the login without storing anything'
   await loaded.plugin.onUnload();
 });
 
-test('the manifest hides the raw settings and declares the setup surface', async () => {
+// The host saves only declared keys: an undeclared one is refused on save
+// ("Setting ... not defined in plugin manifest") and dropped on load, so a key
+// the service reads but the manifest omits can never be supplied from an
+// install - the feature stays unreachable however correct the code is. The same
+// scan catches a credential declared as a plain setting instead of a secret.
+test('every setting the service reads is declared, and credentials stay secrets', async () => {
   const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
-  for (const key of ['InstancesJson', 'TokensJson', 'PasswordsJson', 'MintTokens', 'AllowNoPasswordWorkaround']) assert.equal(manifest.settings[key].hidden, true, key);
+  const settings = manifest.settings;
+  const jsonSettingReads = [...source.matchAll(/jsonSetting\(settings, "([A-Za-z0-9]+)"/g)].map((match) => match[1]);
+  const lookups = [...source.matchAll(/settings\.([A-Z][A-Za-z0-9]*)/g)].map((match) => match[1]);
+  const credentials = [...source.matchAll(/boundSecret\([^,]+,\s*"([A-Za-z0-9]+)"/g)].map((match) => match[1]);
+  assert.ok(jsonSettingReads.length >= 10 && lookups.length >= 1 && credentials.length >= 2,
+    'the scan still finds the settings the service reads');
+  for (const key of new Set([...jsonSettingReads, ...lookups, ...credentials])) {
+    assert.ok(settings[key], `${key} is read by the service but not declared in the manifest, so no install can save it`);
+  }
+  for (const key of new Set(credentials)) {
+    assert.equal(settings[key].secure, true, `${key} carries credentials and has to be declared as a secure setting, never a plain one`);
+  }
+});
+
+test('the manifest declares the setup surface and the documented control labels', async () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
   assert.deepEqual(manifest.surfaces.map((surface) => [surface.role, surface.endpoint]), [['setup', 'setup'], ['diagnostics', 'e64-diagnostics']]);
   assert.ok(manifest.api.some((api) => api.id === 'setup') && manifest.api.some((api) => api.id === 'ui'));
   assert.equal(manifest.settings.AdjustmentOwner.valueLabels.grinder, 'Let the grinder adjust itself');
