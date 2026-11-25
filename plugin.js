@@ -24,6 +24,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // its SQLite WAL, so downloads are rare and bounded.
   const LOG_MIN_INTERVAL_MS = 10 * 60000, LOG_IDLE_REFRESH_MS = 6 * 3600000, LOG_CONNECT_DELAY_MS = 60000,
     LOG_MAX_FAILURES = 3, MAX_SERVICE_ROWS = 500;
+  // Local API v1: owner-authorized read-only endpoints on dev-mode devices
+  const LOCAL_API_ROUTES = ["grind_log", "service_log", "alert_log", "portafilters", "recipes", "settings", "config", "file", "ws_token"];
   // Diagnostics keep only these vendor fields. Serial numbers, session ids,
   // Wi-Fi credentials, cloud URLs and log messages never leave the plugin.
   const exposed = {
@@ -257,6 +259,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const rows = jsonSetting(settings, "InstancesJson", []);
     const tokens = jsonSetting(settings, "TokensJson", {});
     const passwords = jsonSetting(settings, "PasswordsJson", {});
+    const localApiTokens = jsonSetting(settings, "ApiTokensJson", {});
     const mintTokens = jsonSetting(settings, "MintTokens", false);
     const allowNoPassword = jsonSetting(settings, "AllowNoPasswordWorkaround", false);
     const allowControl = jsonSetting(settings, "AllowControl", false);
@@ -264,15 +267,18 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const linkWorkflow = jsonSetting(settings, "LinkWorkflowGrinder", true);
     const syncWorkflow = jsonSetting(settings, "SyncWorkflowGrinder", true);
     const recordDose = jsonSetting(settings, "RecordGrindDose", false);
+    const useLocalApi = jsonSetting(settings, "UseLocalApi", false);
     if (typeof recordDose !== "boolean") fail("RecordGrindDose must be true or false");
     if (typeof syncWorkflow !== "boolean") fail("SyncWorkflowGrinder must be true or false");
     if (typeof populateGrinder !== "boolean" || typeof linkWorkflow !== "boolean") fail("PopulateGrinderRecord and LinkWorkflowGrinder must be true or false");
+    if (typeof useLocalApi !== "boolean") fail("UseLocalApi must be true or false");
     const syncBacklight = jsonSetting(settings, "SyncBacklight", false);
     const owner = settings && settings.AdjustmentOwner !== undefined ? settings.AdjustmentOwner : "off";
     if (typeof allowControl !== "boolean" || typeof syncBacklight !== "boolean") fail("AllowControl and SyncBacklight must be true or false");
     if (!OWNERS.includes(owner)) fail("AdjustmentOwner must be off, grinder or decaid");
     if (!Array.isArray(rows) || rows.length > MAX || !tokens || Array.isArray(tokens) || typeof tokens !== "object") fail("invalid instance or token JSON");
     if (!passwords || Array.isArray(passwords) || typeof passwords !== "object") fail("PasswordsJson must be an object");
+    if (!localApiTokens || Array.isArray(localApiTokens) || typeof localApiTokens !== "object") fail("ApiTokensJson must be an object");
     if (typeof mintTokens !== "boolean") fail("MintTokens must be true or false");
     if (typeof allowNoPassword !== "boolean") fail("AllowNoPasswordWorkaround must be true or false");
     const ids = new Set();
@@ -291,13 +297,16 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       if (!Number.isInteger(pollMs) || pollMs < 0 || (pollMs !== 0 && pollMs < 100) || pollMs > 3600000) fail("pollMs is out of bounds");
       const token = boundSecret(tokens, "TokensJson", id, "token", row.host);
       const password = boundSecret(passwords, "PasswordsJson", id, "password", row.host);
+      const localApiToken = boundSecret(localApiTokens, "ApiTokensJson", id, "token", row.host);
       if (token.length > 2048) fail("TokensJson token is too long");
       if (password.length > 1024) fail("PasswordsJson password is too long");
+      if (localApiToken.length > 2048) fail("ApiTokensJson token is too long");
       if (!mintTokens && !token) fail("each instance needs a token unless MintTokens is true");
       if (mintTokens && !token && !password && !allowNoPassword) fail("MintTokens needs a password or AllowNoPasswordWorkaround for " + id);
       ids.add(id);
       return {id, name, scheme, host: row.host, port: row.port, pollMs, token, certSha256, restPort,
-        password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner, populateGrinder, linkWorkflow, syncWorkflow, recordDose};
+        password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner, populateGrinder, linkWorkflow, syncWorkflow, recordDose,
+        useLocalApi, localApiToken, staticLocalApiToken: Boolean(localApiToken)};
     });
     if (Object.keys(tokens).some((id) => !ids.has(id))) fail("TokensJson contains an unknown id");
     if (Object.keys(passwords).some((id) => !ids.has(id))) fail("PasswordsJson contains an unknown id");
@@ -735,6 +744,13 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     if (!instance.connected || log.status === "unsupported-host" || log.status === "suspended") return;
     log.status = "downloading"; log.lastAttemptAt = new Date().toISOString(); log.nextAt = Date.now() + LOG_MIN_INTERVAL_MS;
     try {
+      // Try Local API v1 first if configured
+      if (hasLocalApi(config)) {
+        await downloadLogsLocalApi(instance);
+        Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0});
+        return;
+      }
+      // Fall back to vendor download_machine_logs ZIP
       // Reuse the connection's Owner session; log in again only when it was refused.
       const fetchZip = () => fetch(restUrl(config, "download_machine_logs"), {
         method: "POST", body: "{}", responseType: "base64",
@@ -768,10 +784,83 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     } catch (error) {
       log.failures++;
       Object.assign(log, {status: log.failures >= LOG_MAX_FAILURES ? "suspended" : "failed",
-        lastError: error && /^(grind log|no matching|zip|inflate|login)/.test(error.message) ? error.message : "grind log download failed"});
+        lastError: error && /^(grind log|no matching|zip|inflate|login|local api)/.test(error.message) ? error.message : "grind log download failed"});
     } finally {
       if (instance.epoch === epoch) queueLogDownload(instance, LOG_IDLE_REFRESH_MS);
     }
+  }
+  async function downloadLogsLocalApi(instance) {
+    const config = instance.config;
+    const headers = {"Content-Type": "application/json", "X-E64-Local-Token": config.localApiToken};
+    if (instance.restCookie) headers.Cookie = "PHPSESSID=" + instance.restCookie;
+    const pin = config.certSha256 ? {tlsPinSha256: config.certSha256} : {};
+    const fetchJson = (route, body = {}) => fetch(localApiUrl(config, route), {
+      method: "POST", body: JSON.stringify(body),
+      headers, ...pin
+    });
+    // Fetch grind_log
+    let response = await fetchJson("grind_log", {limit: 5000});
+    if (!response || !response.ok) throw new Error("local api grind_log HTTP " + (response ? response.status : "no response"));
+    let data = await response.json();
+    if (!data.success || !data.data || !data.data.rows) throw new Error("local api grind_log: " + (data.error || "invalid response"));
+    const rows = data.data.rows.map((row) => {
+      // Convert Local API row format to CSV-like format for grindRows compatibility
+      const flat = {};
+      for (const [key, value] of Object.entries(row)) {
+        flat[key] = value !== null && value !== undefined ? String(value) : "";
+      }
+      return flat;
+    });
+    // Process grind log rows
+    for (const grind of instance.grindEvents) {
+      if (grind.grindUuid) continue;
+      const row = matchGrindRowLocalApi(instance, grind, rows);
+      if (!row) continue;
+      applyGrindRowLocalApi(grind, row);
+      if (grind.doseShot) writeShotGrind(grind, false).catch(() => {});
+    }
+    // Fetch service_log
+    response = await fetchJson("service_log", {limit: MAX_SERVICE_ROWS});
+    if (!response || !response.ok) throw new Error("local api service_log HTTP " + (response ? response.status : "no response"));
+    data = await response.json();
+    if (!data.success || !data.data || !data.data.rows) throw new Error("local api service_log: " + (data.error || "invalid response"));
+    mergeServiceRowsLocalApi(instance, data.data.rows);
+  }
+  function matchGrindRowLocalApi(instance, grind, rows) {
+    const used = new Set(instance.grindEvents.map((event) => event.grindUuid).filter(Boolean));
+    return rows.find((row) => {
+      if (!row.grind_uuid || used.has(row.grind_uuid)) return false;
+      const amount = Number(row.recipe_amount) / 1000;
+      if (grind.targetWeightGr && Number.isFinite(amount) && amount > 0 && Math.abs(amount - grind.targetWeightGr) > 0.5) return false;
+      const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(row.grind_date_time || "");
+      return !m || Math.abs(new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() - grind.completedAtMs) <= LOG_MATCH_MS;
+    }) || null;
+  }
+  function applyGrindRowLocalApi(grind, row) {
+    const num = (key, scale = 1) => row[key] === undefined || row[key] === "" || !Number.isFinite(Number(row[key])) ? null : Number(row[key]) / scale;
+    const um = (key) => { const dum = num(key); return dum === null ? null : String(Math.floor((dum + 5) / 10)); };
+    const text = (key) => typeof row[key] === "string" && row[key] !== "" ? row[key].slice(0, 128) : null;
+    grind.grindUuid = text("grind_uuid");
+    grind.trigger = text("grind_trigger");
+    grind.log = {grindWeightGr: num("grind_weight", 1000), grindDurationMs: num("grind_duration"), setting: um("grind_ddd"),
+      successful: row.grind_successfull === undefined ? null : row.grind_successfull === "1" || row.grind_successfull === "true"};
+    grind.recipe = {index: num("recipe_index"), uuid: text("recipe_uuid"), mode: text("recipe_mode"), type: text("recipe_type"),
+      amountGr: num("recipe_amount", 1000), setting: um("recipe_coarseness"), brewTimeMs: num("recipe_brew_time"), brewWeightGr: num("recipe_brew_weight", 1000),
+      icon: text("recipe_icon"), gbsEnabled: row.recipe_gbs_enabled === undefined || row.recipe_gbs_enabled === "" ? null : row.recipe_gbs_enabled === "1" || row.recipe_gbs_enabled === "true"};
+  }
+  function mergeServiceRowsLocalApi(instance, rows) {
+    const byId = new Map();
+    const index = (name) => {
+      const idx = ["event_id", "event_type_id", "event_type", "event_date_time", "event_details"].indexOf(name);
+      return idx >= 0 ? idx : -1;
+    };
+    for (const row of rows) {
+      const id = Number(row.event_id);
+      if (!Number.isSafeInteger(id) || id < 0) continue;
+      byId.set(id, {id, eventTypeId: Number(row.event_type_id) || null, eventType: redact(row.event_type || "").slice(0, 64),
+        eventDateTime: (row.event_date_time || "").slice(0, 32), details: redact(row.event_details || "")});
+    }
+    instance.serviceRows = Array.from(byId.values()).sort((a, b) => a.id - b.id).slice(-MAX_SERVICE_ROWS);
   }
   // Service-log rows are vendor free text: identifiers and network details are redacted.
   function redact(text) {
@@ -800,6 +889,12 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   }
   function restUrl(config, route) {
     return "https://" + hostName(config) + (config.restPort === 443 ? "" : ":" + config.restPort) + "/rest_api/" + route;
+  }
+  function localApiUrl(config, route) {
+    return "https://" + hostName(config) + (config.restPort === 443 ? "" : ":" + config.restPort) + "/rest_api/" + route;
+  }
+  function hasLocalApi(config) {
+    return config.useLocalApi && config.staticLocalApiToken && config.localApiToken;
   }
   // Rows as objects, newest first (highest grind_id), at most 20.
   function grindRows(text) {

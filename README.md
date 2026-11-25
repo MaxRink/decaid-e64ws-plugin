@@ -345,6 +345,41 @@ fixed category (`login HTTP <status>`, `login returned no bearer token` or
 `login request failed`) and never echoes device response text. Static `TokensJson` values are reused, so a static token
 must be refreshed manually after a single-connection close.
 
+## Local API v1 (dev-mode devices)
+
+On **dev-mode devices only** (development image where the first word of `/etc/issue` is `development`), the plugin can use the Local Owner HTTP API v1 for more efficient log retrieval. This API provides direct access to SQLite tables without requiring the vendor's ZIP download mechanism.
+
+To enable Local API support:
+
+1. **Deploy the Local API module** to the device using `e64root api deploy` (see [mahlkoenig-e64ws-local-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/blob/main/docs/LOCAL_API.md))
+2. **Configure the plugin**:
+   - Set `UseLocalApi` to `"true"` in the plugin settings
+   - Put the owner token in `ApiTokensJson`: `{"one":{"host":"<instance host>","token":"<local-api-token>"}}`
+
+The Local API token is **separate** from the WSS token. It authorizes read-only access to:
+- `grind_log` - grind history with recipe data
+- `service_log` - event/service log
+- `alert_log` - alert history
+- `portafilters` - portafilter calibration data
+- `recipes` - recipe definitions
+- `settings` - machine settings (redacted)
+- `config` - machine configuration (redacted)
+- `file` - whitelisted file access
+- `ws_token` - fresh WSS token minting
+
+When `UseLocalApi` is enabled and a valid token is configured, the plugin will:
+- Use Local API endpoints for grind log and service log retrieval
+- Fall back to the vendor's `download_machine_logs` ZIP if Local API is unavailable
+- Continue using the standard WSS connection for real-time state updates
+
+**Security notes:**
+- Local API requires both a vendor REST session AND the owner token
+- Sensitive data (Wi-Fi passwords, role credentials, cloud URLs) is redacted by the Local API module
+- The Local API is **read-only** - no motor, calibration, or state-changing actions are exposed
+- Only works on dev-mode devices
+
+See [mahlkoenig-e64ws-local-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/blob/main/docs/LOCAL_API.md) for the full API contract.
+
 ## Xenia mode
 
 The plugin can present the Decaid host as a local **Xenia** to the E64's stock
