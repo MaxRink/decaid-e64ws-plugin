@@ -382,9 +382,22 @@ On **dev-mode devices only** (development image where the first word of `/etc/is
 To enable Local API support:
 
 1. **Deploy the Local API module** to the device using `e64root api deploy` (see [mahlkoenig-e64ws-local-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/blob/main/docs/LOCAL_API.md))
-2. **Configure the plugin**:
-   - Set `UseLocalApi` to `"true"` in the plugin settings
-   - Put the owner token in `ApiTokensJson`: `{"one":{"host":"<instance host>","token":"<local-api-token>"}}`
+2. **Configure the plugin** in the Mahlkönig E64 settings dialog (Decaid's **Plugins** settings). Both fields are declared in `manifest.json`, so both appear in that one dialog like every other declared setting:
+   - `UseLocalApi` ("Use the Local API") - an ordinary enum setting, `Off` by default; set it to `On`;
+   - `ApiTokensJson` ("E64 Local API tokens") - a **secure** string setting; set it to
+     `{"one":{"host":"<instance host>","token":"<local-api-token>"}}`.
+
+`ApiTokensJson` is declared with `"secure": true`, so Decaid keeps the token in
+its secret store instead of the ordinary plugin preferences: the settings
+endpoint returns only `{"isSet": true}` and never the value. Like `TokensJson`
+and `PasswordsJson`, each entry is bound to the host it was saved for, so
+re-enter the token after changing that instance's `host`. The setup wizard does
+not ask for it; the Local API token stays a settings field.
+
+A plugin can only be configured through keys its manifest declares: the host
+refuses a save for any other key ("Setting ... not defined in plugin manifest")
+and drops undeclared keys on load. Declaring both keys is what makes the feature
+reachable from an install - the service code alone cannot turn it on.
 
 The Local API token is **separate** from the WSS token. The API's own route
 table lists eleven read-only routes; this plugin calls exactly **two** of them:

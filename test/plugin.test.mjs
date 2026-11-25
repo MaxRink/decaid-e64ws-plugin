@@ -1608,6 +1608,81 @@ test('the manifest hides the raw settings and declares the setup surface', async
   assert.equal(manifest.drivers.some((driver) => (driver.surfaces || []).some((surface) => surface.role === 'setup')), false, 'stock hosts reject a setup driver surface');
 });
 
+// The host contract this plugin ships against (decaid
+// lib/src/plugins/plugin_loader_service.dart and lib/src/settings/
+// plugins_settings_view.dart at the host commit CI pins): savePluginSettings
+// throws for a key the manifest does not declare, refuses an enum value outside
+// `values`, keeps `secure` keys in the secret store instead of the ordinary
+// preferences, and hands every stored key back on load. The settings dialog
+// maps every declared entry into one flat form, so a declaration is all a field
+// needs to reach the user: a key the manifest omits cannot be supplied from an
+// install, however correct the service code is.
+function hostSave(manifest, patch) {
+  for (const [key, value] of Object.entries(patch)) {
+    const schema = manifest.settings[key];
+    assert.ok(schema, `the host rejects the undeclared setting ${key}`);
+    if (schema.type === 'enum') assert.ok(schema.values.includes(value), `${key} must be one of ${schema.values.join(', ')}`);
+  }
+  const secure = {}, ordinary = {};
+  for (const [key, value] of Object.entries(patch)) (manifest.settings[key].secure === true ? secure : ordinary)[key] = value;
+  return {ordinary, secure, load: () => ({...ordinary, ...secure})};
+}
+
+test('the manifest declares the Local API settings the plugin reads', async () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const settings = manifest.settings;
+  const read = new Set([...source.matchAll(/jsonSetting\(settings, "([A-Za-z]+)"/g)].map((match) => match[1]));
+  read.add('AdjustmentOwner');
+  for (const key of ['UseLocalApi', 'ApiTokensJson']) assert.ok(read.has(key), `the service reads ${key}`);
+  for (const key of read) assert.ok(settings[key], `${key} is declared in the manifest, so the host can save it`);
+  assert.deepEqual([settings.UseLocalApi.type, settings.UseLocalApi.values, settings.UseLocalApi.default], ['enum', ['false', 'true'], 'false']);
+  assert.deepEqual([settings.ApiTokensJson.type, settings.ApiTokensJson.secure === true, settings.ApiTokensJson.default], ['string', true, '{}']);
+  const saved = hostSave(manifest, {UseLocalApi: 'true', ApiTokensJson: '{"one":{"host":"127.0.0.1","token":"synthetic"}}'});
+  assert.deepEqual(Object.keys(saved.secure), ['ApiTokensJson'], 'the token list is a secret, not a plain setting');
+  assert.deepEqual(Object.keys(saved.ordinary), ['UseLocalApi'], 'the enable flag is not secret material');
+});
+
+test('the declared keys enable the Local API and their declared defaults leave it off', async () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const token = 'synthetic-local-api-token';
+  const tokenList = JSON.stringify({one: {host: '127.0.0.1', token}});
+  const zip = zipOf([{name: 'HemroE64WSServiceLogs_SN1_x.csv', data: [serviceHeader, '1,1,PowerOn,2026-11-23 11:00:00,Firmware started'].join('\n'), method: 8}]);
+  const on = await logHarness({zip, extraSettings: hostSave(manifest, {UseLocalApi: 'true', ApiTokensJson: tokenList}).load()});
+  await on.connect();
+  await on.grind();
+  assert.equal(on.localCalls('grind_log').length, 1, 'the declared flag and token reach the service');
+  assert.equal(on.localCalls('service_log').length, 1);
+  assert.deepEqual([on.events().log.status, on.downloads()], ['ok', 0], 'the Local API answered, so the vendor ZIP is not needed');
+  await on.loaded.plugin.onUnload();
+  const off = await logHarness({zip, extraSettings: hostSave(manifest, {UseLocalApi: manifest.settings.UseLocalApi.default, ApiTokensJson: tokenList}).load()});
+  await off.connect();
+  await off.grind();
+  assert.deepEqual([off.localCalls('grind_log').length, off.downloads()], [0, 1], 'the declared default keeps the vendor ZIP path');
+  await off.loaded.plugin.onUnload();
+});
+
+test('a token supplied through the declared secure field reaches the Local API client', async () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  const token = 'synthetic-owner-token-2f8c41';
+  const saved = hostSave(manifest, {UseLocalApi: 'true', ApiTokensJson: JSON.stringify({one: {host: '127.0.0.1', token}})});
+  const h = await logHarness({zip: Buffer.alloc(0), extraSettings: saved.load()});
+  await h.connect();
+  await h.grind();
+  const [grindCall] = h.localCalls('grind_log');
+  const [serviceCall] = h.localCalls('service_log');
+  assert.deepEqual([grindCall.init.headers['X-E64-Local-Token'], serviceCall.init.headers['X-E64-Local-Token']], [token, token]);
+  assert.equal([grindCall.url, serviceCall.url].some((url) => url.includes(token)), false, 'the token travels in the header, never the URL');
+  const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
+  const surfaces = [h.loaded.plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}),
+    h.loaded.plugin.handleHttpRequest({endpoint: 'ui', method: 'GET', query: {...query, ui: '1'}}),
+    h.loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query}),
+    h.loaded.plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET', query: {...query, ui: '1'}}),
+    h.loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}), h.service(), h.events()];
+  for (const surface of surfaces) assert.equal(JSON.stringify(surface).includes(token), false, 'no surface echoes the token');
+  assert.equal(JSON.stringify(h.events().log).includes(token), false, 'the log reports a category, not the token');
+  await h.loaded.plugin.onUnload();
+});
+
 test('diagnostics render as an HTML page for ui=1 and stay JSON otherwise', async () => {
   const fixture = {sent: [], events: []};
   const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 0}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 'secret-token'}})}, fixture);
