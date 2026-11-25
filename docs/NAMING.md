@@ -104,12 +104,18 @@ alone, not on accuracy.
 | `InstancesJson` label            | `E64 instances`                          | `Grinder instances`                             |
 | `TokensJson` label               | `E64 session tokens`                     | `Grinder session tokens`                        |
 | `PasswordsJson` label            | `E64 Owner passwords`                    | `Grinder Owner passwords`                       |
+| `ApiTokensJson` label            | `E64 Local API tokens`                   | `Grinder Local API tokens`                      |
+| README, Local API section        | `the Mahlkönig E64 settings dialog`      | `the Mahlkönig WebSocket grinders settings dialog` |
 | `InstancesJson` description      | `pinned SHA-256 of the E64 certificate`  | `pinned SHA-256 of the grinder certificate`     |
 | `docs/VM_TESTING.md` title       | `Testing the E64 plugin …`               | `Testing the plugin …`                          |
 | Release title (workflow)         | `E64 WS <tag>`                           | `Mahlkönig WebSocket grinders <tag>`            |
 
 The setup notification needed a new sentence, not just a new string: the name
 is plural, so "Mahlkönig WebSocket grinders needs setup" would not parse.
+
+`UseLocalApi` and `ApiTokensJson` were declared by #23, after the first attempt
+at this rename; their labels are renamed here now that the keys exist. A
+`UseLocalApi` label needs no change — "Use the Local API" never named a model.
 
 The default instance name moved to `Mahlkönig grinder` because the wizard
 pre-fills it for every model, and pre-filling `Mahlkönig E64` re-created the

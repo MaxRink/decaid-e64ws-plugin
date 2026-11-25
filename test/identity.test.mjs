@@ -107,9 +107,9 @@ test('the persisted identity stays frozen so installed settings keep working', (
     'surface ids and endpoints appear in host URLs',
   );
   const frozen = [
-    'InstancesJson', 'TokensJson', 'PasswordsJson', 'MintTokens', 'AllowNoPasswordWorkaround',
-    'AllowControl', 'SyncBacklight', 'AdjustmentOwner', 'PopulateGrinderRecord',
-    'LinkWorkflowGrinder', 'SyncWorkflowGrinder', 'RecordGrindDose',
+    'InstancesJson', 'TokensJson', 'PasswordsJson', 'ApiTokensJson', 'MintTokens', 'DebugLog',
+    'UseLocalApi', 'AllowNoPasswordWorkaround', 'AllowControl', 'SyncBacklight', 'AdjustmentOwner',
+    'PopulateGrinderRecord', 'LinkWorkflowGrinder', 'SyncWorkflowGrinder', 'RecordGrindDose',
   ];
   for (const key of frozen) {
     assert.ok(key in manifest.settings, `the host stores ${key} by key, so the key stays`);

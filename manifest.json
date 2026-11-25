@@ -138,7 +138,7 @@
     },
     "ApiTokensJson": {
       "type": "string",
-      "label": "E64 Local API tokens",
+      "label": "Grinder Local API tokens",
       "description": "JSON object mapping instance ids to {\"host\": <instance host>, \"token\": <Local Owner API v1 token>}. Only used while the instance host matches and Use the Local API is on. This token is separate from the WSS token and is stored as a secure setting, never in the ordinary settings.",
       "secure": true,
       "default": "{}",
