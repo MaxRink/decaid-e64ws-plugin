@@ -111,7 +111,6 @@
         "true": "On",
         "false": "Off"
       },
-      "hidden": true,
       "advanced": true
     },
     "PasswordsJson": {
