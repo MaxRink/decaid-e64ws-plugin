@@ -23,7 +23,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // Each machine-log download writes a ZIP to the grinder's /tmp and checkpoints
   // its SQLite WAL, so downloads are rare and bounded.
   const LOG_MIN_INTERVAL_MS = 10 * 60000, LOG_IDLE_REFRESH_MS = 6 * 3600000, LOG_CONNECT_DELAY_MS = 60000,
-    LOG_MAX_FAILURES = 3, MAX_SERVICE_ROWS = 500;
+    LOG_MAX_FAILURES = 3, LOG_REQUEST_TIMEOUT_MS = 20000, MAX_SERVICE_ROWS = 500;
   // Local API v1: owner-authorized read-only endpoints on dev-mode devices
   const LOCAL_API_ROUTES = ["grind_log", "service_log", "alert_log", "portafilters", "recipes", "settings", "config", "file", "ws_token"];
   // Diagnostics keep only these vendor fields. Serial numbers, session ids,
@@ -726,6 +726,22 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // at most one download per 10 minutes, plus one idle refresh per 6 hours for
   // the service log. Three failures in a row suspend downloads until the next
   // connect. Only the parsed, bounded rows are kept; the ZIP and CSV are dropped.
+  // A stalled socket must never pin the log at "downloading": the request races a
+  // bounded deadline so the finally block always reschedules. QuickJS has no
+  // AbortController, so the deadline is a timer race that also aborts the socket
+  // when the host does expose one.
+  function fetchLogRequest(url, init, label) {
+    const controller = typeof AbortController === "function" ? new AbortController() : null;
+    let timer = null;
+    const pending = Promise.resolve().then(() => fetch(url, controller ? {...init, signal: controller.signal} : init));
+    const deadline = new Promise((resolve, reject) => {
+      timer = setTimeout(() => {
+        if (controller) { try { controller.abort(); } catch (error) {} }
+        reject(new Error(label + " timeout"));
+      }, LOG_REQUEST_TIMEOUT_MS);
+    });
+    return Promise.race([pending, deadline]).finally(() => { if (timer !== null) clearTimeout(timer); });
+  }
   function queueLogDownload(instance, delayMs) {
     const log = instance.grindLog;
     if (!instance.connected || !instance.config.mintTokens || log.status === "unsupported-host" || log.status === "suspended") return;
@@ -752,11 +768,11 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       }
       // Fall back to vendor download_machine_logs ZIP
       // Reuse the connection's Owner session; log in again only when it was refused.
-      const fetchZip = () => fetch(restUrl(config, "download_machine_logs"), {
+      const fetchZip = () => fetchLogRequest(restUrl(config, "download_machine_logs"), {
         method: "POST", body: "{}", responseType: "base64",
         headers: {"Content-Type": "application/json", Authorization: "Bearer " + instance.restToken, ...(instance.restCookie ? {Cookie: "PHPSESSID=" + instance.restCookie} : {})},
         ...(config.certSha256 ? {tlsPinSha256: config.certSha256} : {})
-      });
+      }, "grind log");
       let response = instance.restToken ? await fetchZip() : null;
       if (!response || (!response.ok && response.status >= 400 && response.status < 500)) {
         await mintToken(instance);
@@ -794,10 +810,10 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const headers = {"Content-Type": "application/json", "X-E64-Local-Token": config.localApiToken};
     if (instance.restCookie) headers.Cookie = "PHPSESSID=" + instance.restCookie;
     const pin = config.certSha256 ? {tlsPinSha256: config.certSha256} : {};
-    const fetchJson = (route, body = {}) => fetch(localApiUrl(config, route), {
+    const fetchJson = (route, body = {}) => fetchLogRequest(localApiUrl(config, route), {
       method: "POST", body: JSON.stringify(body),
       headers, ...pin
-    });
+    }, "local api");
     // Fetch grind_log
     let response = await fetchJson("grind_log", {limit: 5000});
     if (!response || !response.ok) throw new Error("local api grind_log HTTP " + (response ? response.status : "no response"));

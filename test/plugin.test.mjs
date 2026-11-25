@@ -813,7 +813,8 @@ test('csv parser handles quotes, escaped quotes, CRLF and semicolons', async () 
   assert.deepEqual(plain(parseCsv('﻿a;b\n1;2\n')), [['a', 'b'], ['1', '2']]);
 });
 
-async function logHarness({zip, failDownloads = false, binary = true, refuse = () => false} = {}) {
+async function logHarness({zip, failDownloads = false, binary = true, refuse = () => false, hang = () => false,
+  route = () => null, extraSettings = {}, apiToken = null} = {}) {
   let now = Date.parse('2026-11-23T12:00:00Z');
   class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const pending = new Map(); let nextTimer = 0;
@@ -821,13 +822,18 @@ async function logHarness({zip, failDownloads = false, binary = true, refuse = (
   const calls = [];
   const fetchImpl = async (url, init) => {
     calls.push({url, init});
+    if (hang(url, init)) return new Promise(() => {});
+    const custom = route(url, init);
+    if (custom) return custom;
     if (url.endsWith('/login')) return {ok: true, status: 200, headers: {get: (name) => name === 'authorization' ? `Bearer t${calls.length}` : 'PHPSESSID=abc; path=/'}, text: async () => ''};
     if (failDownloads) return {ok: false, status: 503, headers: {get: () => null}, base64: async () => ''};
     if (refuse(init)) return {ok: false, status: 400, headers: {get: () => null}, base64: async () => ''};
+    if (/\/rest_api\/(grind_log|service_log)$/.test(url)) return localJson({success: true, data: {rows: []}});
     return {ok: true, status: 200, headers: {get: () => null}, ...(binary ? {base64: async () => zip.toString('base64')} : {})};
   };
   const fixture = {sent: [], events: []};
-  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100, restPort: 8443}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})}, fixture, timers, fetchImpl);
+  const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100, restPort: 8443}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}}),
+    ...(apiToken ? {UseLocalApi: 'true', ApiTokensJson: JSON.stringify({one: {host: '127.0.0.1', token: apiToken}})} : {}), ...extraSettings}, fixture, timers, fetchImpl);
   const settle = async () => {
     for (let i = 0; i < 8; i++) {
       await new Promise(resolve => setImmediate(resolve));
@@ -856,12 +862,17 @@ async function logHarness({zip, failDownloads = false, binary = true, refuse = (
     await settle();
   };
   const downloads = () => calls.filter((call) => call.url.endsWith('/download_machine_logs')).length;
+  const localCalls = (name) => calls.filter((call) => call.url.endsWith('/rest_api/' + name));
+  const requests = () => calls.map((call) => call.url.replace('https://127.0.0.1:8443/rest_api/', ''));
   const logins = () => calls.filter((call) => call.url.endsWith('/login')).length;
   const query = {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one'};
   const events = () => JSON.parse(loaded.plugin.handleHttpRequest({endpoint: 'grind-events', method: 'GET', query}).body);
   const service = (extra = {}) => loaded.plugin.handleHttpRequest({endpoint: 'service-log', method: 'GET', query: extra});
-  return {loaded, connect, grind, advance, downloads, logins, events, service, logTimers, calls, disconnect: () => loaded.registrations[0].handlers.disconnect()};
+  return {loaded, connect, grind, advance, downloads, localCalls, requests, logins, events, service, logTimers, calls, disconnect: () => loaded.registrations[0].handlers.disconnect()};
 }
+// A Local API v1 response: the plugin reads .ok, .status, .headers.get() and .json().
+const localJson = (payload, status = 200, headers = {}) => ({ok: status >= 200 && status < 300, status,
+  headers: {get: (name) => headers[name.toLowerCase()] ?? null}, json: async () => payload});
 const stampAt = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
 const grindHeader = 'grind_id,grind_uuid,grind_date_time,grind_ddd,grind_duration,grind_weight,grind_successfull,recipe_index,recipe_uuid,recipe_mode,recipe_amount,recipe_type,recipe_coarseness,recipe_brew_time,recipe_brew_weight';
@@ -942,6 +953,34 @@ test('log downloads respect old hosts, suspend after repeated failures and stay 
   assert.deepEqual([kept[0].id, kept.at(-1).id], [201, 700]);
   assert.equal(big.events().events.length, 20);
   await big.loaded.plugin.onUnload();
+});
+
+test('a log request that never resolves cannot leave the log downloading', async () => {
+  const stalled = await logHarness({zip: Buffer.alloc(0), hang: (url) => url.endsWith('/download_machine_logs')});
+  await stalled.connect();
+  await stalled.grind();
+  assert.equal(stalled.downloads(), 1, 'the grind starts the download');
+  assert.equal(stalled.events().log.status, 'downloading');
+  await stalled.advance(20001);
+  const log = stalled.events().log;
+  assert.equal(log.status, 'failed', 'the bounded deadline ends the download');
+  assert.equal(log.failures, 1);
+  assert.equal(log.lastError, 'grind log timeout');
+  assert.deepEqual(stalled.logTimers().map(([, timer]) => timer.delay), [6 * 3600000], 'the finally block still rescheduled');
+  await stalled.loaded.plugin.onUnload();
+
+  const local = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    hang: (url) => url.endsWith('/rest_api/grind_log')});
+  await local.connect();
+  await local.grind();
+  assert.equal(local.localCalls('grind_log').length, 1, 'the local API is asked first');
+  assert.equal(local.events().log.status, 'downloading');
+  await local.advance(20001);
+  const localLog = local.events().log;
+  assert.equal(localLog.status, 'failed', 'the local API deadline ends the download');
+  assert.equal(localLog.failures, 1);
+  assert.equal(localLog.lastError, 'local api timeout');
+  await local.loaded.plugin.onUnload();
 });
 
 async function inventoryRun({decaid = decaidApi(), extra = {}, grinderType = 'E64 WS', connects = 1} = {}) {
