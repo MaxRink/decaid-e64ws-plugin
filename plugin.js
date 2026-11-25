@@ -218,6 +218,237 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   const instances = new Map();
 
   function fail(message) { throw new Error("E64 configuration error: " + message); }
+
+  // --- Staged connection diagnosis ---------------------------------------
+  // The host reports a failed login or socket as a plain exception, and its
+  // message is the only structured evidence a plugin gets. Every stage below
+  // keeps that message and its code, adds a fixed classification, and states
+  // what was expected and what to do next. Nothing here may echo a token, a
+  // password, an auth header or a certificate body.
+  const PLUGIN_VERSION = "0.7.6"; // Keep in step with manifest.json; a test enforces it.
+  const DIAG_STEPS_MAX = 24, DIAG_TEXT_MAX = 600, CERT_PROBE_MS = 4000;
+  const PIN_COMPARISON = "SHA-256 of the leaf certificate DER, lowercase hex, colons ignored";
+  // No certificate can hash to this, so a host that accepts it does not enforce the pin.
+  const UNMATCHABLE_SHA256 = "0000000000000000000000000000000000000000000000000000000000000000";
+  // One vocabulary for the notification, the diagnostics bundle and the docs.
+  const STAGE_LABEL = {
+    dns: "DNS lookup", refused: "TCP connect (connection refused)", unreachable: "TCP connect (no route)",
+    timeout: "TCP connect (timeout)", tls: "TLS handshake", certificate: "TLS certificate verification",
+    fingerprint: "certificate pin (certSha256)", upgrade: "WebSocket upgrade", auth: "HTTP login authentication",
+    protocol: "protocol/schema", backoff: "login backoff", config: "configuration", unknown: "connect"
+  };
+  function fingerprintGroups(hex) {
+    const clean = typeof hex === "string" ? hex.replace(/[^0-9a-f]/gi, "").toUpperCase() : "";
+    return clean ? clean.replace(/(..)(?!$)/g, "$1:") : "";
+  }
+  // One parser for the settings, the setup page and the docs: "the value after
+  // sha256 Fingerprint=" with optional colons, spaces or hyphens and any case.
+  // Anything else is refused with the reason; the pin is never repaired into
+  // something that might verify the wrong certificate.
+  function parseFingerprint(value) {
+    if (typeof value !== "string") return {ok: false, reason: "is not text"};
+    const raw = value.trim();
+    const label = /^([A-Za-z0-9]+)\s*fingerprint\s*[:=]\s*/i.exec(raw);
+    if (label && label[1].toUpperCase() !== "SHA256") {
+      return {ok: false, reason: "is labelled " + label[1].toUpperCase() + "; certSha256 needs the SHA-256, not SHA-1, fingerprint (pass -sha256 to openssl)"};
+    }
+    const hex = raw.replace(/^sha256\s*fingerprint\s*[:=]\s*/i, "").replace(/[:\s-]/g, "").toLowerCase();
+    if (!hex) return {ok: false, reason: "is empty"};
+    if (!/^[0-9a-f]+$/.test(hex)) return {ok: false, reason: "has characters that are not hex; paste only the value after \"sha256 Fingerprint=\""};
+    if (hex.length === 40) return {ok: false, reason: "is 40 hex characters, which is a SHA-1 fingerprint; the pin needs the SHA-256 (pass -sha256 to openssl)"};
+    if (hex.length !== 64) return {ok: false, reason: "is " + hex.length + " hex characters after removing colons, spaces and hyphens; the pin needs 64 hex characters"};
+    return {ok: true, hex, grouped: fingerprintGroups(hex)};
+  }
+  // Everything a diagnostics surface may print passes through here: configured
+  // secrets by value, then auth material and certificate bodies by shape.
+  function redactForReport(value, secrets, cap) {
+    let text = String(value === undefined || value === null ? "" : value);
+    for (const secret of secrets || []) {
+      if (typeof secret === "string" && secret.length >= 4) text = text.split(secret).join("[redacted]");
+    }
+    text = text
+      .replace(/-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g, "[certificate body redacted]")
+      .replace(/([?&](?:token|api[_-]?key|password|secret|auth))=[^\s&#'"]*/gi, "$1=[redacted]")
+      .replace(/\b(authorization|proxy-authorization|www-authenticate|x-e64-local-token|set-cookie|cookie|phpsessid)\b\s*:\s*[^\r\n]+/gi, "[auth header redacted]")
+      .replace(/\b(bearer)\s+[A-Za-z0-9._~+/=-]+/gi, "$1 [redacted]")
+      .replace(/\b(password|passwd|pwd|secret|token)\b(\s*[:=]\s*)("[^"]*"|'[^']*'|\S+)/gi, "$1$2[redacted]");
+    return cap === undefined ? text.slice(0, DIAG_TEXT_MAX) : text.slice(0, cap);
+  }
+  // A classify result is the whole story of one failed stage: a fixed class, the
+  // expected value, what was actually observed and one next step.
+  function classifyFailure(error, site, config) {
+    const message = error && typeof error.message === "string" ? error.message
+      : typeof error === "string" ? error : error === undefined || error === null ? "" : String(error);
+    const code = error && typeof error.code === "string" ? error.code : null;
+    const haystack = (message + " " + (code || "")).toLowerCase();
+    const has = (...needles) => needles.some((needle) => haystack.indexOf(needle) >= 0);
+    // "HTTP status code: 401" and "login HTTP 400", but never the port of a URL.
+    const statusMatch = [/(?:^|[^-\w])status(?:\s+code)?\s*[:=]?\s*(\d{3})\b/, /\bhttp\s+(\d{3})\b/]
+      .map((pattern) => pattern.exec(haystack)).filter(Boolean).sort((a, b) => a.index - b.index)[0];
+    const base = {message, code, status: statusMatch ? Number(statusMatch[1]) : null, retryAfterMs: null};
+    const result = (stage, expected, observed, next) => ({...base, stage, class: stage, expected, observed, next});
+    const detail = message || "the host reported no message";
+    if (has("eai_again", "enotfound", "getaddrinfo", "name or service not known", "nodename nor servname", "failed host lookup", "no address associated", "temporary failure in name resolution")) {
+      return result("dns", (config && typeof config.host === "string" ? config.host : "the grinder's address") + " to resolve on this network",
+        "the name lookup failed (" + detail + ")",
+        "check the address for typos, then use the grinder's IP address instead of a name; this device must be on the same network");
+    }
+    if (has("econnrefused", "connection refused", "actively refused")) {
+      return result("refused", "something listening on " + endpointOf(config, site),
+        "the host answered but refused the TCP connection (" + detail + ")",
+        "wake the grinder, then check " + endpointOf(config, site) + ": the E64 serves WSS on 9997 and its HTTPS login on 443");
+    }
+    if (has("enetunreach", "ehostunreach", "no route to host", "network is unreachable")) {
+      return result("unreachable", "a route from this device to the grinder",
+        "the network reported no route to the grinder (" + detail + ")",
+        "connect this device to the same network as the grinder and check its address");
+    }
+    if (has("etimedout", "esockettimedout", "timed out", "timeout", "timeoutexception")) {
+      return result("timeout", "an answer from " + endpointOf(config, site) + " within the connect timeout",
+        "nothing answered before the timeout (" + detail + ")",
+        "check that the grinder is powered and on this network; a firewall or a wrong address usually looks like this");
+    }
+    if (has("pin mismatch", "certificate pin", "pinned certificate", "fingerprint mismatch", "pin verification")
+      || (has("pin") && has("mismatch", "does not match", "unexpected certificate", "not the pinned"))) {
+      return result("fingerprint", expectedPin(config), redactForReport(detail),
+        "compare certSha256 with " + fingerprintCommand(config) + "; case, colons and spaces do not matter, the 64 hex characters must match exactly");
+    }
+    if (has("certificate_verify_failed", "certificate verify failed", "self signed", "self-signed", "unable to verify", "certificate has expired", "hostname mismatch", "unknown ca", "bad certificate", "cert_")) {
+      return result("certificate", expectedPin(config),
+        "the host did not verify the grinder's certificate (" + detail + ")",
+        "run " + fingerprintCommand(config) + " and pin that value in certSha256; a host without tlsPinSha256 support ignores the pin and falls back to platform validation");
+    }
+    if (has("handshakeexception", "handshake failed", "handshake error", "tls alert", "ssl_error", "sslexception", "wrong version number", "protocol version", "certificate required")) {
+      return result("tls", "a TLS handshake before the request is sent",
+        "the TLS handshake failed (" + detail + ")",
+        "check the scheme and the port: 9997 is wss and 443 is https; a plain HTTP port or an intercepting proxy looks like this");
+    }
+    if (has("not upgraded", "upgrade rejected", "upgrade required", "websocket", "101 switching")) {
+      return result("upgrade", "an HTTP 101 Switching Protocols upgrade",
+        "the upgrade was refused (" + detail + ")",
+        base.status === 401 || base.status === 403
+          ? "the grinder rejected the session token: mint a fresh token or check the Owner password, then reconnect within the token's 5-minute life"
+          : "check that the address and port are the WebSocket listener (9997), not the web interface");
+    }
+    if (site === "login" && (base.status === 401 || base.status === 403) || has("unauthorized", "forbidden", "401 unauthorized", "403 forbidden")) {
+      return result("auth", "HTTP 2xx and a session token in the response",
+        "the grinder refused the login (" + detail + ")",
+        "check the Owner password for this grinder; a password changed on the grinder must be re-entered here");
+    }
+    if (has("invalid response", "unexpected", "schema", "not json", "malformed", "no data")) {
+      return result("protocol", "an E64 reply with the documented fields",
+        "the reply did not match the E64 schema (" + detail + ")",
+        "check that this is an E64 on the configured port; a firmware change can rename fields, so attach the diagnostics bundle to a bug report");
+    }
+    return result("unknown", "a reachable grinder on the configured address and port",
+      "the connect failed without a recognisable transport error (" + detail + ")",
+      "re-check the address and port; attach the diagnostics bundle from the plugin's diagnostics page to a bug report");
+  }
+  // An entry in the staged record; timings are milliseconds, never wall-clock guesses.
+  function stageStep(instance, stage, ok, ms, failure) {
+    const diag = instance.diag;
+    const step = {stage, ok, at: new Date().toISOString()};
+    if (typeof ms === "number" && Number.isFinite(ms)) step.ms = ms;
+    if (failure) { step.class = failure.stage; }
+    diag.steps.push(step);
+    if (diag.steps.length > DIAG_STEPS_MAX) diag.steps.splice(0, diag.steps.length - DIAG_STEPS_MAX);
+    if (failure) {
+      diag.lastFailure = {class: failure.stage, message: redactForReport(failure.message, instanceSecrets(instance)), code: failure.code, at: new Date().toISOString()};
+      diag.last = failure;
+    }
+    return step;
+  }
+  // The staged log. At the quiet level it names the stages, their timings and
+  // the class a failed one matched; the verbose level adds the underlying error
+  // message and code, redacted.
+  function stageLines(instance, verbose) {
+    const lines = instance.diag.steps.map((step) => (step.ms === undefined ? "" : step.ms + " ms ") +
+      step.stage + " " + (step.ok ? "ok" : "failed") + (step.class ? " (" + step.class + ")" : ""));
+    const failure = instance.diag.lastFailure;
+    if (verbose && failure) lines.push("last error: " + failure.class + " " + failure.message + " [code: " + (failure.code || "none") + "]");
+    return lines;
+  }
+  // The bundle a user attaches to a bug report: version, platform, endpoint,
+  // the TLS/pin summary, the staged steps with timings and the error class.
+  // No token, password, auth header or certificate body can reach it.
+  function diagnosticsBundle(instance) {
+    const config = instance.config || {}, secrets = instanceSecrets(instance), failure = instance.diag.last;
+    return {
+      schema: "e64-diagnostics/1",
+      plugin: {id: "mahlkoenig-e64.reaplugin", version: PLUGIN_VERSION},
+      platform: runtimePlatform(),
+      generatedAt: new Date().toISOString(),
+      instance: {name: config.name, host: config.host, port: config.port, scheme: config.scheme, restPort: config.restPort,
+        pollMs: config.pollMs, connected: Boolean(instance.connected), tokenSource: instance.tokenSource,
+        mintTokens: Boolean(config.mintTokens), staticToken: Boolean(config.staticToken)},
+      tls: {pinned: Boolean(config.certSha256), expectedFingerprint: config.certSha256 ? fingerprintGroups(config.certSha256) : null,
+        observedFingerprint: instance.diag.observedFingerprint ? fingerprintGroups(instance.diag.observedFingerprint) : null,
+        observedSource: instance.diag.observedFingerprint ? "confirmed by an enforced tlsPinSha256 probe" : "not exposed by the host transport; run the openssl command in docs/TROUBLESHOOTING.md",
+        comparison: PIN_COMPARISON, hostPinSupport: instance.diag.hostPinSupport || "unknown",
+        certificateBody: "never included"},
+      fingerprintCommand: fingerprintCommand(config),
+      stages: instance.diag.steps.slice(),
+      error: failure ? {class: failure.stage, code: failure.code || null, status: failure.status || null,
+        expected: failure.expected, observed: redactForReport(failure.observed, secrets), next: failure.next} : null,
+      lastFailure: instance.diag.lastFailure ? {class: instance.diag.lastFailure.class, message: instance.diag.lastFailure.message,
+        code: instance.diag.lastFailure.code, at: instance.diag.lastFailure.at} : null,
+      redaction: "tokens, Owner passwords, auth headers and certificate bodies are removed before anything is returned"
+    };
+  }
+  // The command that prints the value the host compares, for this grinder.
+  // The exact "host:port" a stage talks to, so a message never leaves the user
+  // guessing which of the two E64 ports failed.
+  function endpointOf(config, site) {
+    if (!config) return "<grinder-address>";
+    const port = site === "login" || site === "cert"
+      ? (Number.isInteger(config.restPort) ? config.restPort : 443)
+      : (Number.isInteger(config.port) ? config.port : 9997);
+    return (typeof config.host === "string" ? hostName(config) : "<grinder-address>") + ":" + port;
+  }
+  function fingerprintCommand(config) {
+    const port = config && Number.isInteger(config.restPort) ? config.restPort : 443;
+    const host = config && typeof config.host === "string" ? hostName(config) : "<grinder-ip>";
+    return "`openssl s_client -connect " + host + ":" + port + " </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256`";
+  }
+  // The expected value for the two stages where the certificate is the subject.
+  function expectedPin(config) {
+    return config && config.certSha256
+      ? "leaf SHA-256 fingerprint " + fingerprintGroups(config.certSha256) + " via certSha256"
+      : "a certificate this host trusts, or the grinder's SHA-256 fingerprint in certSha256 (none is pinned)";
+  }
+  function failureSentence(failure, secrets, cap) {
+    return "Expected " + failure.expected + ". " +
+      "Observed: " + redactForReport(failure.observed, secrets, cap) + "." +
+      (failure.status ? " HTTP status " + failure.status + "." : "") +
+      (failure.retryAfterMs ? " Retry-After: " + Math.round(failure.retryAfterMs / 1000) + " s." : "") +
+      " Next: " + failure.next + " [code: " + (failure.code || "none") + "]";
+  }
+  function loginDiagnosis(failure, secrets, cap) {
+    const category = failure.status ? "login HTTP " + failure.status : "login " + failure.stage;
+    const lead = failure.status ? "The login request reached the grinder and was answered HTTP " + failure.status + "."
+      : failure.stage === "backoff" ? "The login request was not sent: the previous failure is still being backed off."
+      : "The login request did not complete: it failed at " + STAGE_LABEL[failure.stage] + ".";
+    return category + ". " + lead + " " + failureSentence(failure, secrets, cap);
+  }
+  function loginFailureError(failure, secrets) {
+    const error = new Error(loginDiagnosis(failure, secrets));
+    error.failure = failure;
+    error.stage = failure.stage;
+    error.category = failure.status ? "login HTTP " + failure.status : "login " + failure.stage;
+    return error;
+  }
+  function runtimePlatform() {
+    try { if (typeof process === "object" && process && typeof process.platform === "string") return process.platform + (process.arch ? "/" + process.arch : ""); } catch (_) {}
+    try { if (typeof navigator === "object" && navigator && typeof navigator.userAgent === "string" && navigator.userAgent) return navigator.userAgent.slice(0, 120); } catch (_) {}
+    return "unknown (the host exposes no platform)";
+  }
+  function fetchWithTimeout(request, init, ms) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("connect timeout after " + ms + " ms")), ms);
+      fetch(request, init).then((value) => { clearTimeout(timer); resolve(value); },
+        (error) => { clearTimeout(timer); reject(error); });
+    });
+  }
   function jsonSetting(settings, key, fallback) {
     const value = settings && settings[key] !== undefined ? settings[key] : JSON.stringify(fallback);
     if (typeof value !== "string") fail(key + " must be JSON text");
@@ -270,6 +501,10 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const syncWorkflow = jsonSetting(settings, "SyncWorkflowGrinder", true);
     const recordDose = jsonSetting(settings, "RecordGrindDose", false);
     const useLocalApi = jsonSetting(settings, "UseLocalApi", false);
+    // DebugLog is the opt-in diagnostics level: staged progress keeps the
+    // underlying error message and code, still redacted, when it is on.
+    const debugLog = jsonSetting(settings, "DebugLog", false);
+    if (typeof debugLog !== "boolean") fail("DebugLog must be true or false");
     if (typeof recordDose !== "boolean") fail("RecordGrindDose must be true or false");
     if (typeof syncWorkflow !== "boolean") fail("SyncWorkflowGrinder must be true or false");
     if (typeof populateGrinder !== "boolean" || typeof linkWorkflow !== "boolean") fail("PopulateGrinderRecord and LinkWorkflowGrinder must be true or false");
@@ -292,8 +527,15 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       if (typeof name !== "string" || !name || name.length > 128) fail("instance name is invalid");
       if ((scheme !== "ws" && scheme !== "wss") || !Number.isInteger(row.port) || row.port < 1 || row.port > 65535) fail("instance address is invalid");
       if (!validHost(row.host)) fail("instance host must be a loopback, private, link-local or .local address");
-      const certSha256 = row.certSha256 === undefined ? null : typeof row.certSha256 === "string" ? row.certSha256.replace(/:/g, "").toLowerCase() : "";
-      if (certSha256 !== null && !/^[0-9a-f]{64}$/.test(certSha256)) fail("certSha256 must be 64 hex characters");
+      // The pin is parsed, never repaired: an unparsable value names what is
+      // wrong with it instead of a bare "must be 64 hex characters".
+      let certSha256 = null;
+      if (row.certSha256 !== undefined) {
+        if (typeof row.certSha256 !== "string") fail("certSha256 must be text holding the SHA-256 fingerprint of the grinder's certificate");
+        const parsed = parseFingerprint(row.certSha256);
+        if (!parsed.ok) fail("certSha256 " + parsed.reason);
+        certSha256 = parsed.hex;
+      }
       const restPort = row.restPort === undefined ? 443 : row.restPort;
       if (!Number.isInteger(restPort) || restPort < 1 || restPort > 65535) fail("restPort is invalid");
       if (!Number.isInteger(pollMs) || pollMs < 0 || (pollMs !== 0 && pollMs < 100) || pollMs > 3600000) fail("pollMs is out of bounds");
@@ -308,7 +550,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       ids.add(id);
       return {id, name, scheme, host: row.host, port: row.port, pollMs, token, certSha256, restPort,
         password, mintTokens, allowNoPassword, staticToken: Boolean(token), allowControl, syncBacklight, owner, populateGrinder, linkWorkflow, syncWorkflow, recordDose,
-        useLocalApi, localApiToken, staticLocalApiToken: Boolean(localApiToken)};
+        useLocalApi, localApiToken, staticLocalApiToken: Boolean(localApiToken), debugLog};
     });
     if (Object.keys(tokens).some((id) => !ids.has(id))) fail("TokensJson contains an unknown id");
     if (Object.keys(passwords).some((id) => !ids.has(id))) fail("PasswordsJson contains an unknown id");
@@ -501,7 +743,10 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   }
 
   function make(config) {
-    return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, observationExpiry: null, connected: false, observations: {}, lastObservationAt: null, tokenSource: config.staticToken ? "static" : "none", lastMintAt: null, lastMintError: null, mintFailures: 0, nextMintAt: null,
+    return {config, deviceId: null, context: null, transport: null, handle: null, epoch: 0, nextId: 0, pending: new Map(), poll: null, observationExpiry: null, connected: false, observations: {}, lastObservationAt: null, tokenSource: config.staticToken ? "static" : "none", lastMintAt: null, lastMintError: null, lastMintDiagnosis: null, mintFailures: 0, nextMintAt: null,
+      // Staged record of the connect pipeline: what ran, how long it took and,
+      // on failure, the fixed class plus the redacted underlying error.
+      diag: {steps: [], last: null, lastFailure: null, verbose: Boolean(config.debugLog)},
       xenia: {syncWeight: 0, syncFilter: 0, lastScriptId: null, lastScriptAt: null},
       control: {allowControl: config.allowControl, debugMode: config.allowControl ? "unprobed" : "disabled", probedAt: null,
         owner: config.owner, syncBacklight: config.syncBacklight, lastAction: null, lastBrewEvent: null},
@@ -582,9 +827,19 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const context = instance.context;
     return disconnect(instance, epoch, reason).finally(() => context && context.reportDisconnected().catch(() => {}));
   }
+  // Every value that must never appear in a message, a log line or a bundle.
+  function instanceSecrets(instance) {
+    const config = instance.config || {};
+    return [config.token, config.password, config.localApiToken, instance.restToken, instance.restCookie];
+  }
   async function mintToken(instance) {
-    const config = instance.config;
-    if (instance.nextMintAt !== null && Date.now() < instance.nextMintAt) throw new Error("login backoff");
+    const config = instance.config, secrets = instanceSecrets(instance);
+    if (instance.nextMintAt !== null && Date.now() < instance.nextMintAt) {
+      const wait = Math.ceil((instance.nextMintAt - Date.now()) / 1000);
+      throw loginFailureError({stage: "backoff", class: "backoff", code: null, status: null, retryAfterMs: instance.nextMintAt - Date.now(),
+        message: "login backoff", expected: "the login backoff to have expired", observed: "a login attempt " + wait + " s before the backoff expired",
+        next: "wait " + wait + " s; the delay doubles per failed login up to 5 minutes"}, secrets);
+    }
     let role = "Owner", password = config.password;
     if (!password) {
       if (!config.allowNoPassword) throw new Error("no token, password or workaround configured");
@@ -592,17 +847,32 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       role = payload.role; password = payload.password;
     }
     // The E64 REST API is HTTPS-only (443; HTTP 80 redirects), whatever the WebSocket scheme.
-    let failure = "login request failed";
+    let failure = null;
+    let response = null;
     try {
-      const response = await fetch(restUrl(config, "login"), {
+      response = await fetch(restUrl(config, "login"), {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({userRole: role, password}),
         ...(config.certSha256 ? {tlsPinSha256: config.certSha256} : {})
       });
-      // Device response text is never echoed: only a fixed category and the status.
-      if (!response || !response.ok) failure = "login HTTP " + (response && Number.isInteger(response.status) ? response.status : "unknown");
-      else {
+    } catch (error) {
+      // The host's transport error is classified, never discarded: it names the
+      // stage (DNS, TCP, TLS, certificate or pin) the login stopped at.
+      failure = classifyFailure(error, "login", config);
+    }
+    if (!failure) {
+      if (!response || !response.ok) {
+        const status = response && Number.isInteger(response.status) ? response.status : null;
+        const retryAfter = status === 429 && response.headers && response.headers.get ? retryAfterMs(response) : null;
+        failure = {stage: "auth", class: "auth", code: null, status, retryAfterMs: retryAfter,
+          message: "login HTTP " + (status === null ? "unknown" : status),
+          expected: "HTTP 2xx and a session token for the Owner password",
+          observed: "the grinder answered HTTP " + (status === null ? "unknown" : status) + " to POST " + restUrl(config, "login"),
+          next: status === 429
+            ? "the grinder is rate limiting; wait for the Retry-After window, then retry"
+            : "check the Owner password for this grinder; a password changed on the grinder must be re-entered here"};
+      } else {
         const auth = response.headers && response.headers.get ? response.headers.get("authorization") : "";
         if (auth && auth.startsWith("Bearer ") && auth.slice(7).trim()) {
           const cookie = /PHPSESSID=([^;,\s]+)/.exec(response.headers.get("set-cookie") || "");
@@ -610,27 +880,34 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
           instance.restToken = auth.slice(7).trim();
           instance.tokenSource = config.password ? "password" : "workaround";
           instance.lastMintAt = new Date().toISOString();
-          instance.lastMintError = null; instance.mintFailures = 0; instance.nextMintAt = null;
+          instance.lastMintError = null; instance.lastMintDiagnosis = null; instance.mintFailures = 0; instance.nextMintAt = null;
           loginNotice(instance, null);
           return auth.slice(7).trim();
         }
-        failure = "login returned no bearer token";
+        failure = {stage: "protocol", class: "protocol", code: null, status: null, retryAfterMs: null,
+          message: "login returned no bearer token",
+          expected: "an HTTP 2xx login with a Bearer session token header",
+          observed: "the login succeeded but the response carried no Bearer token",
+          next: "check that this grinder's firmware returns the session token on POST /rest_api/login; attach the diagnostics bundle to a bug report"};
       }
-    } catch (_) {}
+    }
     instance.tokenSource = "none";
-    instance.lastMintError = failure;
+    instance.lastMintError = failure.status ? "login HTTP " + failure.status : "login " + failure.stage;
+    instance.lastMintDiagnosis = loginDiagnosis(failure, secrets);
     instance.mintFailures++;
     instance.nextMintAt = Date.now() + Math.min(MINT_BACKOFF_MS * Math.pow(2, instance.mintFailures - 1), MINT_BACKOFF_MAX_MS);
     loginNotice(instance, failure);
-    throw new Error(failure);
+    throw loginFailureError(failure, secrets);
   }
   // A failing login is a current condition the user must fix; withdraw it once a login succeeds.
+  // The message names the stage, the expected value and one next step; the
+  // blanket "check the password, certSha256 and address" is gone.
   function loginNotice(instance, failure) {
     const id = "login-" + instance.config.id;
     try {
       if (failure === null) host.dismissNotification(id);
-      else host.notify({id, message: "E64 " + instance.config.name + ": " + failure + ". Check the Owner password, certSha256 and grinder address.",
-        action: {id: "help", label: "Help", type: "openExternalUrl", url: "https://github.com/MaxRink/decaid-e64ws-plugin#token-acquisition"}});
+      else host.notify({id, message: "E64 " + instance.config.name + ": " + loginDiagnosis(failure, instanceSecrets(instance), Infinity),
+        action: {id: "help", label: "Help", type: "openExternalUrl", url: "https://github.com/MaxRink/decaid-e64ws-plugin/blob/main/docs/TROUBLESHOOTING.md"}});
     } catch (_) {}
   }
   // A grind is complete when the state leaves the grind family. The grind UUID
@@ -1080,8 +1357,10 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
         });
         host.transport.send(handle, {type: "text", data: JSON.stringify({type: commands.probe[0], msgId: 1, data: {}})}).catch(() => { clearTimeout(timer); resolve("locked"); });
       });
-    } catch (_) {
+    } catch (error) {
+      // The probe is best-effort, but its reason belongs in the diagnostics.
       control.debugMode = "unknown";
+      control.probeError = failureSentence(classifyFailure(error, "open", config), instanceSecrets(instance), Infinity);
     } finally {
       control.probedAt = new Date().toISOString();
       if (handle !== null) await host.transport.close(handle).catch(() => {});
@@ -1318,22 +1597,61 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     instance.restToken = null; instance.restCookie = null;
     return transport && handle ? transport.close(handle).catch(() => {}) : Promise.resolve();
   }
+  // One sentence per failed connect attempt: the stage, the underlying host
+  // error with its code, the expected value, what was observed and one next
+  // step. Every configured secret is redacted before it is returned.
+  function connectDiagnosis(instance, error) {
+    const secrets = instanceSecrets(instance), failure = error && error.failure ? error.failure : classifyFailure(error, "open", instance.config);
+    const head = "E64 connection failed at " + STAGE_LABEL[failure.stage] + ". ";
+    if (error && error.failure) return {failure, message: head + redactForReport(error.message, secrets, Infinity)};
+    return {failure, message: head + failureSentence(failure, secrets, Infinity)};
+  }
+  // The connect failure is a current condition, so it is visible in Decaid
+  // instead of only in whatever the host does with a rejected handler.
+  function connectNotice(instance, diagnosis) {
+    const id = "connect-" + instance.config.id;
+    try {
+      if (diagnosis === null) host.dismissNotification(id);
+      else host.notify({id, message: "E64 " + instance.config.name + ": " + diagnosis.replace(/^E64 /, ""),
+        action: {id: "help", label: "Help", type: "openExternalUrl", url: "https://github.com/MaxRink/decaid-e64ws-plugin/blob/main/docs/TROUBLESHOOTING.md"}});
+    } catch (_) {}
+  }
   async function connect(instance, context) {
     await disconnect(instance);
     const epoch = ++instance.epoch; const transport = context.transport;
     instance.context = context; instance.transport = transport; instance.observations = {}; instance.lastObservationAt = null;
+    instance.diag.steps.length = 0;
     try {
       if (!instance.config.token && instance.config.mintTokens) {
-        const token = await mintToken(instance);
+        const started = Date.now();
+        let token;
+        try { token = await mintToken(instance); }
+        catch (error) {
+          stageStep(instance, "token", false, Date.now() - started, error && error.failure ? error.failure : classifyFailure(error, "login", instance.config));
+          throw error;
+        }
+        stageStep(instance, "token", true, Date.now() - started);
         if (epoch !== instance.epoch) return;
         instance.config.token = token;
       }
       const pin = instance.config.scheme === "wss" && instance.config.certSha256 ? {tlsPinSha256: instance.config.certSha256} : {};
-      const opened = await transport.open({kind: "websocket", url: url(instance.config), ...pin});
+      const opening = Date.now();
+      let opened;
+      try { opened = await transport.open({kind: "websocket", url: url(instance.config), ...pin}); }
+      catch (error) {
+        stageStep(instance, "websocket", false, Date.now() - opening, classifyFailure(error, "open", instance.config));
+        throw error;
+      }
+      stageStep(instance, "websocket", true, Date.now() - opening);
       if (epoch !== instance.epoch) { await transport.close(opened.handle).catch(() => {}); return; }
       instance.handle = opened.handle; instance.connected = true;
       transport.onEvent(opened.handle, (eventValue) => event(instance, epoch, opened.handle, eventValue));
-      await request(instance, "state", true); schedule(instance, epoch);
+      const polling = Date.now();
+      try { await request(instance, "state", true); }
+      catch (error) { stageStep(instance, "state", false, Date.now() - polling, classifyFailure(error, "state", instance.config)); throw error; }
+      stageStep(instance, "state", true, Date.now() - polling);
+      connectNotice(instance, null);
+      schedule(instance, epoch);
       syncInventory(instance, epoch);
       // A new connection lifts a suspension and allows one idle refresh if none ran in 6 hours.
       if (instance.grindLog.status === "suspended" || instance.grindLog.retryable === false) {
@@ -1344,8 +1662,15 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     } catch (error) {
       await disconnect(instance, epoch, "E64 connection failed");
       // Host WebSocket errors can echo the connect URL, which carries the token.
-      const detail = error && error.message ? ": " + String(error.message).replace(/token=[^&#'"\s]*/g, "token=[redacted]") : "";
-      throw new Error("E64 connection failed" + detail);
+      const diagnosis = connectDiagnosis(instance, error);
+      instance.diag.lastFailure = {class: diagnosis.failure.stage, message: redactForReport(error && error.message, instanceSecrets(instance)),
+        code: diagnosis.failure.code || null, at: new Date().toISOString()};
+      instance.diag.last = diagnosis.failure;
+      connectNotice(instance, diagnosis.message);
+      const wrapped = new Error(diagnosis.message);
+      wrapped.failure = diagnosis.failure;
+      wrapped.stage = diagnosis.failure.stage;
+      throw wrapped;
     }
   }
   function request(instance, name, publish, payload) {
@@ -1388,45 +1713,120 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   function setupStatus() {
     return {needsSetup: needsSetup !== null, message: needsSetup, instances: Array.from(instances.values()).map((instance) => ({
       id: instance.config.id, name: instance.config.name, deviceId: instance.deviceId, connected: instance.connected,
-      displayedSetting: instance.workflow.display, debugMode: instance.control.debugMode, inventory: instance.inventory.status}))};
+      displayedSetting: instance.workflow.display, debugMode: instance.control.debugMode, inventory: instance.inventory.status,
+      diagnosis: instance.diag.last ? {stage: instance.diag.last.stage, message: failureSentence(instance.diag.last, instanceSecrets(instance))} : null,
+      lastFailure: instance.diag.lastFailure}))};
   }
   // Setup actions never persist anything; the page saves once through the host's settings route.
+  // Every field the assistant accepts, checked on its own so one bad value
+  // never hides another and the message names the field it belongs to.
+  function validateSetupFields(draft) {
+    const fields = {};
+    const host = typeof draft.host === "string" ? draft.host.trim() : "";
+    if (!host) fields.host = "Enter the grinder's address, for example 192.168.1.40.";
+    else if (!validHost(host)) fields.host = "Use the grinder's address on your local network: loopback, a private range such as 192.168.x.x, link-local or a .local name.";
+    const port = draft.port === undefined ? 9997 : draft.port;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) fields.port = "The WebSocket port must be a whole number between 1 and 65535; the E64 uses 9997.";
+    const restPort = draft.restPort === undefined ? 443 : draft.restPort;
+    if (!Number.isInteger(restPort) || restPort < 1 || restPort > 65535) fields.restPort = "The login port must be a whole number between 1 and 65535; the E64 uses 443.";
+    const name = typeof draft.name === "string" ? draft.name.trim() : "";
+    if (name.length > 128) fields.name = "The name must be at most 128 characters.";
+    if (draft.certSha256 !== undefined && draft.certSha256 !== null && draft.certSha256 !== "") {
+      const parsed = parseFingerprint(draft.certSha256);
+      if (!parsed.ok) fields.certSha256 = "certSha256 " + parsed.reason + ". Paste only the value after \"sha256 Fingerprint=\"; the pin needs 64 hex characters.";
+    }
+    return fields;
+  }
+  // The certificate probe is credential-free: GET /rest_api/ping carries no
+  // token and no password, so it can be repeated without spending a session.
+  // It only claims a fingerprint when the host provably enforced the pin.
+  async function probeCertificate(target, candidate, instance) {
+    const note = (pinSupport, observed) => {
+      if (!instance) return;
+      if (pinSupport) instance.diag.hostPinSupport = pinSupport;
+      if (observed) instance.diag.observedFingerprint = observed;
+    };
+    const attempt = async (pin) => {
+      try {
+        await fetchWithTimeout(restUrl(target, "ping"), {method: "GET", tlsPinSha256: pin}, CERT_PROBE_MS);
+        return {ok: true};
+      } catch (error) { return {ok: false, failure: classifyFailure(error, "cert", {...target, certSha256: pin})}; }
+    };
+    const fleet = await attempt(FLEET_SHA256);
+    if (fleet.ok) {
+      // A host that ignores tlsPinSha256 accepts any certificate, so its
+      // success proves nothing about which certificate the grinder serves.
+      const unmatchable = await attempt(UNMATCHABLE_SHA256);
+      if (unmatchable.ok) {
+        note("ignored");
+        return {recognised: false, reason: "pin-unsupported",
+          message: "This Decaid build does not enforce certSha256 (it ignores tlsPinSha256), so the certificate cannot be identified here. Paste the SHA-256 fingerprint from the command below; it is stored and compared exactly."};
+      }
+      note("honoured", FLEET_SHA256);
+      return {recognised: true, certSha256: FLEET_SHA256, observedFingerprint: FLEET_SHA256};
+    }
+    if (candidate && candidate.hex) {
+      const pinned = await attempt(candidate.hex);
+      if (pinned.ok) {
+        note("honoured", candidate.hex);
+        return {recognised: false, pinVerified: true, certSha256: candidate.hex, observedFingerprint: candidate.hex};
+      }
+      return {recognised: false, reason: pinned.failure.stage, message: pinned.failure.expected + " | " + failureSentence(pinned.failure, [])};
+    }
+    return {recognised: false, reason: fleet.failure.stage, message: failureSentence(fleet.failure, [])};
+  }
   async function setupAction(body) {
     const draft = body && typeof body === "object" ? body : {};
     if (draft.action === "check") return {status: 200, payload: {errors: validate(draft.settings).errors}};
-    const hostValue = typeof draft.host === "string" ? draft.host.trim() : "";
-    if (!validHost(hostValue)) return {status: 400, payload: {error: "host", message: "Use the grinder's address on your local network."}};
+    if (draft.action === "validate") return {status: 200, payload: {fields: validateSetupFields(draft)}};
+    const fields = validateSetupFields(draft);
+    if (fields.host) return {status: 400, payload: {error: "host", fields, message: fields.host}};
+    if (fields.port) return {status: 400, payload: {error: "port", fields, message: fields.port}};
+    if (fields.restPort) return {status: 400, payload: {error: "restPort", fields, message: fields.restPort}};
+    if (fields.name) return {status: 400, payload: {error: "name", fields, message: fields.name}};
+    const hostValue = draft.host.trim();
     const restPort = draft.restPort === undefined ? 443 : draft.restPort;
-    if (!Number.isInteger(restPort) || restPort < 1 || restPort > 65535) return {status: 400, payload: {error: "restPort"}};
     const target = {host: hostValue, restPort};
     if (draft.action === "probe-cert") {
-      // Path A: recognise the fleet certificate by pinning it; anything else must be pasted and confirmed.
-      try {
-        await fetch(restUrl(target, "ping"), {method: "GET", tlsPinSha256: FLEET_SHA256});
-        return {status: 200, payload: {recognised: true, certSha256: FLEET_SHA256}};
-      } catch (_) {
-        return {status: 200, payload: {recognised: false}};
-      }
+      const candidate = typeof draft.certSha256 === "string" && draft.certSha256.trim() ? parseFingerprint(draft.certSha256) : null;
+      if (candidate && !candidate.ok) return {status: 400, payload: {error: "certSha256", fields: {certSha256: "certSha256 " + candidate.reason + "."}, message: "certSha256 " + candidate.reason + "."}};
+      const instance = Array.from(instances.values()).find((value) => value.config.host.toLowerCase() === hostValue.toLowerCase());
+      return {status: 200, payload: await probeCertificate(target, candidate, instance)};
     }
     if (draft.action === "test-login" || draft.action === "probe-control") {
       if (Date.now() - lastSetupTest < SETUP_TEST_MS) return {status: 429, payload: {result: "wait", message: "Wait a moment before trying again."}};
       lastSetupTest = Date.now();
-      const pin = typeof draft.certSha256 === "string" ? draft.certSha256.replace(/:/g, "").toLowerCase() : "";
-      if (!/^[0-9a-f]{64}$/.test(pin)) return {status: 400, payload: {error: "certSha256"}};
+      const parsed = typeof draft.certSha256 === "string" ? parseFingerprint(draft.certSha256) : {ok: false, reason: "is missing"};
+      if (!parsed.ok) return {status: 400, payload: {error: "certSha256", fields: {certSha256: "certSha256 " + parsed.reason + "."}, message: "certSha256 " + parsed.reason + "."}};
+      const pin = parsed.hex;
       let password = typeof draft.password === "string" ? draft.password : "";
       if (!password) {
         const saved = Array.from(instances.values()).find((instance) => instance.config.host.toLowerCase() === hostValue.toLowerCase() && instance.config.password);
         password = saved ? saved.config.password : "";
       }
-      if (!password || password.length > 1024) return {status: 400, payload: {result: "no-password", message: "Enter the Owner password."}};
+      if (!password || password.length > 1024) return {status: 400, payload: {result: "no-password", fields: {password: "Enter the Owner password."}, message: "Enter the Owner password."}};
+      const secrets = [password];
       let response;
       try {
         response = await fetch(restUrl(target, "login"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({userRole: "Owner", password}), tlsPinSha256: pin});
-      } catch (_) {
-        return {status: 200, payload: {result: "unreachable", message: "Grinder not reachable, or its certificate changed."}};
+      } catch (error) {
+        // "Not reachable" hid a DNS, TCP, TLS, certificate or pin failure: the
+        // stage is reported instead, with the expected value and one next step.
+        const failure = classifyFailure(error, "login", {...target, certSha256: pin});
+        return {status: 200, payload: {result: failure.stage, reason: failure.stage, message: failureSentence(failure, secrets)}};
       }
+      const status = response && Number.isInteger(response.status) ? response.status : null;
       const auth = response && response.ok && response.headers && response.headers.get ? response.headers.get("authorization") || "" : "";
-      if (!auth.startsWith("Bearer ")) return {status: 200, payload: {result: response && response.ok ? "unexpected" : "wrong-password", message: "The grinder did not accept this password."}};
+      if (!auth.startsWith("Bearer ")) {
+        if (response && response.ok) {
+          return {status: 200, payload: {result: "unexpected", reason: "no-bearer", message: "The grinder accepted the login but returned no session token. Next: check the firmware's /rest_api/login response and attach the diagnostics bundle to a bug report."}};
+        }
+        const retryAfter = status === 429 ? retryAfterMs(response) : null;
+        return {status: 200, payload: {result: "wrong-password", reason: "auth", status, retryAfterMs: retryAfter,
+          message: "The grinder refused this login with HTTP " + (status === null ? "unknown" : status) + "." +
+            (retryAfter ? " Retry-After: " + Math.round(retryAfter / 1000) + " s." : "") +
+            " Next: check the Owner password for this grinder; a password changed on the grinder must be re-entered here."}};
+      }
       if (draft.action === "test-login") return {status: 200, payload: {result: "accepted", message: "Password accepted."}};
       const port = Number.isInteger(draft.port) ? draft.port : 9997;
       const probe = {control: {debugMode: "unknown", probedAt: null}, config: {mintTokens: true, scheme: "wss", host: hostValue, port, certSha256: pin, restPort}};
@@ -1459,10 +1859,11 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
 <section data-pu-step hidden>
   <h2>Trust the grinder's certificate</h2>
   <div id="certOk" class="pu-alert pu-ok" hidden><span class="pu-pill pu-ok">Recognised</span> Standard Mahlkönig E64 certificate.</div>
-  <div id="certUnknown" class="pu-alert pu-warn" hidden><span class="pu-pill pu-warn">Check</span> This is not the usual E64 certificate, or the grinder did not answer. Continue only if you just set up this grinder or its firmware changed.</div>
+  <div id="certUnknown" class="pu-alert pu-warn" hidden><span class="pu-pill pu-warn">Check</span> This is not the usual E64 certificate. Continue only if you just set up this grinder or its firmware changed.</div>
   <code class="pu-code" id="fp"></code>
   <div class="pu-card" id="pasteCard" hidden><div class="pu-row"><label for="paste">Certificate SHA-256</label>
-    <input id="paste" autocomplete="off" spellcheck="false" placeholder="91:B4:12:…"></div></div>
+    <input id="paste" autocomplete="off" spellcheck="false" placeholder="91:B4:12:…" aria-describedby="pasteHint">
+    <p class="pu-hint" id="pasteHint">Read it from the grinder yourself: <code>openssl s_client -connect &lt;grinder-ip&gt;:443 &lt;/dev/null 2&gt;/dev/null | openssl x509 -noout -fingerprint -sha256</code> and paste the value after <code>sha256 Fingerprint=</code>. Colons, spaces and case do not matter.</p></div></div>
   <div class="pu-actions"><button type="button" class="pu-btn" id="trust">Trust this grinder</button></div>
   <details class="pu-details"><summary>What this means</summary><p>Pinning stops Decaid from talking to other servers and keeps the password away from anything that is not an E64. It does not prove this is your grinder, because every E64 shares one certificate. Decaid therefore only accepts local-network addresses and binds the password to this address.</p></details>
   <div id="certOut" class="pu-alert" hidden></div>
@@ -1510,7 +1911,7 @@ SETUP_SCRIPT);
 pu.init({fit: true});
 const base = location.pathname.replace(/\\/[^/]*$/, "");
 const $ = (id) => document.getElementById(id);
-const state = {certSha256: null, previousHost: null, passwordSet: false, instanceId: "e64", loginOk: false, control: null};
+const state = {certSha256: null, offered: null, previousHost: null, passwordSet: false, instanceId: "e64", loginOk: false, control: null, reached: null};
 const say = (el, kind, text) => { el.hidden = !text; el.className = "pu-alert pu-" + kind; el.textContent = text || ""; };
 const post = (body) => pu.api(base + "/setup", {method: "POST", body}).catch((e) => e.data || {result: "error", message: String(e.message)});
 async function load() {
@@ -1542,21 +1943,53 @@ function passwordHint() {
     state.passwordSet ? "The address changed, so enter the password again: it is bound to the grinder's address." : "The grinder's Owner password.";
 }
 const target = () => ({host: $("host").value.trim(), port: Number($("port").value), restPort: Number($("restPort").value)});
+// One server-side parser for every field, so the page and the plugin never
+// disagree and each field has its own message.
+async function checkField(field, out) {
+  const payload = {action: "validate", ...target(), name: $("name").value.trim(), certSha256: state.certSha256 || ""};
+  if (field === "certSha256" && $("paste").value.trim()) payload.certSha256 = $("paste").value.trim();
+  const result = await post(payload);
+  const message = result.fields && result.fields[field];
+  if (out && message !== undefined) say($(out), "error", message);
+  return !message;
+}
 async function probeCert() {
   $("certOk").hidden = $("certUnknown").hidden = $("pasteCard").hidden = true;
   const result = await post({action: "probe-cert", ...target()});
-  if (result.recognised) { $("certOk").hidden = false; $("fp").textContent = pu.fingerprint(result.certSha256); state.offered = result.certSha256; }
-  else { $("certUnknown").hidden = false; $("pasteCard").hidden = false; $("fp").textContent = ""; state.offered = null; }
+  state.reached = result.recognised || result.pinVerified || result.reason === "pin-unsupported" ? "ok" : (result.reason || null);
+  if (result.recognised) {
+    $("certOk").hidden = false; state.offered = result.certSha256;
+    $("fp").textContent = pu.fingerprint(result.certSha256);
+    say($("certOut"), "ok", "This is the fleet E64 certificate, confirmed by an enforced pin.");
+    return true;
+  }
+  if (result.pinVerified) {
+    state.offered = null; state.certSha256 = result.certSha256; $("certOk").hidden = false;
+    $("fp").textContent = pu.fingerprint(result.certSha256);
+    say($("certOut"), "ok", "Verified: this fingerprint is the one the grinder presents.");
+    return true;
+  }
+  $("certUnknown").hidden = false; $("pasteCard").hidden = false; $("fp").textContent = ""; state.offered = null;
+  // The reason is specific: a refused connection is not an unknown certificate.
+  say($("certOut"), "error", result.message || "Paste the grinder's SHA-256 fingerprint to trust it.");
+  return false;
 }
-$("trust").addEventListener("click", () => {
-  const pasted = $("paste").value.replace(/:/g, "").trim().toLowerCase();
-  const pin = state.offered || pasted;
-  if (!/^[0-9a-f]{64}$/.test(pin)) return say($("certOut"), "error", "Enter the 64-character SHA-256 fingerprint.");
+$("trust").addEventListener("click", async () => {
+  const pasted = state.offered || $("paste").value.trim();
+  if (!pasted) return say($("certOut"), "error", "Paste the SHA-256 fingerprint from the command shown above.");
+  const checked = await post({action: "validate", ...target(), name: $("name").value.trim(), certSha256: pasted});
+  if (checked.fields && checked.fields.certSha256) return say($("certOut"), "error", checked.fields.certSha256);
+  const pin = pasted.replace(/[^0-9a-f]/gi, "").toLowerCase();
   if (!state.offered && !$("trust").dataset.confirm) { $("trust").dataset.confirm = "1"; $("trust").textContent = "Trust anyway"; return say($("certOut"), "warn", "Tap again to trust this certificate."); }
   state.certSha256 = pin; say($("certOut"), "ok", "Trusted: " + pu.fingerprint(pin));
 });
 $("allowControl").addEventListener("change", () => { $("backlightRow").hidden = !$("allowControl").checked; });
 $("host").addEventListener("input", passwordHint);
+// Validate each field as it is left, with the message that belongs to it.
+for (const [field, out] of [["host", "hostOut"], ["port", "hostOut"], ["restPort", "hostOut"], ["name", "hostOut"]]) {
+  $(field).addEventListener("change", () => { checkField(field, out); });
+}
+$("paste").addEventListener("change", () => { checkField("certSha256", "certOut"); });
 $("test").addEventListener("click", async () => {
   const result = await post({action: "test-login", ...target(), certSha256: state.certSha256, password: $("password").value});
   state.loginOk = result.result === "accepted";
@@ -1591,13 +2024,17 @@ function summary() {
 }
 pu.wizard($("page"), async (index) => {
   if (index === 1) {
-    const host = $("host").value.trim();
-    if (!host) { say($("hostOut"), "error", "Enter the grinder's address."); return false; }
-    const check = await post({action: "probe-cert", ...target()});
-    if (check.error === "host") { say($("hostOut"), "error", check.message); return false; }
-    say($("hostOut"), "error", ""); passwordHint(); await probeCert(); return true;
+    const fields = (await post({action: "validate", ...target(), name: $("name").value.trim()})).fields || {};
+    const invalid = Object.keys(fields).filter((name) => name !== "certSha256");
+    if (invalid.length) { say($("hostOut"), "error", fields[invalid[0]]); return false; }
+    say($("hostOut"), "error", ""); passwordHint();
+    const reached = await probeCert();
+    // Reachability is verified before the assistant claims anything: a grinder
+    // that refused the connection is not a grinder with an unknown certificate.
+    if (!reached && state.reached !== "pin-unsupported") return false;
+    return true;
   }
-  if (index === 2 && !state.certSha256) { say($("certOut"), "error", "Trust the certificate to continue."); return false; }
+  if (index === 2 && !state.certSha256) { say($("certOut"), "error", "Trust the certificate to continue: paste its fingerprint, then tap Trust."); return false; }
   if (index === 3 && !$("password").value && !(state.passwordSet && !hostChanged())) { say($("pwOut"), "error", "Enter the Owner password."); return false; }
   if (index === 5) summary();
   return true;
@@ -1617,7 +2054,11 @@ $("save").addEventListener("click", async () => {
     const instance = status && status.instances && status.instances[0];
     if (status && status.needsSetup) return say($("saveOut"), "error", status.message);
     if (instance && instance.displayedSetting) return say($("saveOut"), "ok", "Connected, display shows " + instance.displayedSetting + " µm.");
-    if (Date.now() - started < 60000) setTimeout(poll, 1000); else say($("saveOut"), "warn", "Saved. Connect the grinder in Decaid's device list.");
+    if (Date.now() - started < 60000) return setTimeout(poll, 1000);
+    // Never a bare "saved": say which stage the first connect stopped at.
+    const diagnosis = instance && instance.diagnosis;
+    say($("saveOut"), "warn", diagnosis ? "Saved, but the first connect failed at " + diagnosis.stage + ". " + diagnosis.message
+      : "Saved. The grinder has not reported yet: check that it is on and connect it in Decaid's device list.");
   };
   setTimeout(poll, 1000);
 });
@@ -1636,13 +2077,21 @@ load();
   }
   function diagnosticsPage(instance) {
     const {syncing, ...inventory} = instance.inventory;
-    const rows = [["Connected", instance.connected ? "yes" : "no"], ["Display", instance.workflow.display === null ? "–" : instance.workflow.display + " µm"],
+    const failure = instance.diag.last;
+    const rows = [["Connected", instance.connected ? "yes" : "no"],
+      ["Last failure", failure ? failure.stage + ": " + failureSentence(failure, instanceSecrets(instance)) : "–"],
+      ["Staged steps", instance.diag.steps.length ? instance.diag.steps.map((step) => step.stage + (step.ms === undefined ? "" : " " + step.ms + " ms") + (step.ok ? " ok" : " failed")).join(", ") : "–"],
+      ["Fingerprint", instance.config.certSha256 ? fingerprintGroups(instance.config.certSha256) + (instance.diag.observedFingerprint ? " (confirmed by the host)" : " (not yet confirmed)") : "none pinned"],
+      ["Display", instance.workflow.display === null ? "–" : instance.workflow.display + " µm"],
       ["Token", instance.tokenSource], ["Last login error", instance.lastMintError || "–"], ["Grinder record", inventory.status],
       ["Workflow", inventory.workflowLink || "–"], ["Grind log", instance.grindLog.status], ["Control", instance.control.debugMode],
       ["Adjustment owner", instance.control.owner], ["Grind events", String(instance.grindEvents.length)],
       ["Dose recording", !instance.config.recordDose ? "off" : instance.workflow.lastDose ? instance.workflow.lastDose.status + (instance.workflow.lastDose.reason ? ": " + instance.workflow.lastDose.reason : "") : "on, no shot yet"]];
+    const bundle = JSON.stringify(diagnosticsBundle(instance), null, 2);
     return htmlPage("E64 diagnostics", "<header class=\"pu-header\"><h1>" + escapeHtml(instance.config.name) + "</h1><button type=\"button\" class=\"pu-btn pu-secondary\" data-pu-done>Done</button></header><div class=\"pu-card\">" +
-      rows.map(([k, v]) => "<div class=\"pu-row\"><b>" + escapeHtml(k) + "</b><span>" + escapeHtml(v) + "</span></div>").join("") + "</div>", "pu.init({fit: true});");
+      rows.map(([k, v]) => "<div class=\"pu-row\"><b>" + escapeHtml(k) + "</b><span>" + escapeHtml(v) + "</span></div>").join("") + "</div>" +
+      "<details class=\"pu-details\"><summary>Diagnostics bundle for a bug report</summary><p class=\"pu-hint\">Contains no token, no password, no auth header and no certificate body. Attach this to the bug report.</p><code class=\"pu-code\">" +
+      escapeHtml(bundle) + "</code></details>", "pu.init({fit: true});");
   }
   const plugin = {
     id: "mahlkoenig-e64.reaplugin",
@@ -1755,14 +2204,21 @@ load();
       if (request.endpoint === "grind-events") return jsonResponse(200, {events: grindEvents(), log: instance.grindLog, grinderId: instance.inventory.grinderId});
       const read = request.query.read;
       if (read === undefined && request.query.ui === "1") return diagnosticsPage(instance);
-      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "connection" && read !== "xenia" && read !== "control" && read !== "inventory") return jsonResponse(400, {error: "unsupported read"});
+      if (read !== undefined && read !== "config" && read !== "machineInfo" && read !== "connection" && read !== "xenia" && read !== "control" && read !== "inventory" && read !== "diagnostics" && read !== "stages") return jsonResponse(400, {error: "unsupported read"});
       const operation = read === undefined ? null : read;
       if (operation === "xenia") return Promise.resolve(jsonResponse(200, xeniaRead(instance)));
       if (operation === "control") return Promise.resolve(jsonResponse(200, instance.control));
       if (operation === "inventory") { const {syncing, ...inventory} = instance.inventory; return Promise.resolve(jsonResponse(200, inventory)); }
+      if (operation === "diagnostics") return Promise.resolve(jsonResponse(200, diagnosticsBundle(instance, request.query.verbose === "1")));
+      if (operation === "stages") return Promise.resolve(jsonResponse(200, {verbose: instance.diag.verbose || request.query.verbose === "1", lines: stageLines(instance, instance.diag.verbose || request.query.verbose === "1")}));
       if (operation === "connection") {
+        const failure = instance.diag.last;
         const connection = {connected: instance.connected, tokenSource: instance.tokenSource,
           lastMintAt: instance.lastMintAt, lastMintError: instance.lastMintError,
+          lastMintDiagnosis: instance.lastMintDiagnosis,
+          // The staged diagnosis: what failed, what was expected and what was seen.
+          diagnosis: failure ? {stage: failure.stage, status: failure.status, code: failure.code, expected: failure.expected,
+            observed: redactForReport(failure.observed, instanceSecrets(instance)), next: failure.next} : null,
           mintBackoffUntil: instance.nextMintAt === null ? null : new Date(instance.nextMintAt).toISOString(),
           staticToken: Boolean(instance.config.staticToken), mintTokens: Boolean(instance.config.mintTokens)};
         return Promise.resolve({status: 200, headers: {"Content-Type": "application/json"}, body: JSON.stringify(connection)});
