@@ -375,27 +375,41 @@ To enable Local API support:
    - Set `UseLocalApi` to `"true"` in the plugin settings
    - Put the owner token in `ApiTokensJson`: `{"one":{"host":"<instance host>","token":"<local-api-token>"}}`
 
-The Local API token is **separate** from the WSS token. It authorizes read-only access to:
-- `grind_log` - grind history with recipe data
-- `service_log` - event/service log
-- `alert_log` - alert history
-- `portafilters` - portafilter calibration data
-- `recipes` - recipe definitions
-- `settings` - machine settings (redacted)
-- `config` - machine configuration (redacted)
-- `file` - whitelisted file access
-- `ws_token` - fresh WSS token minting
+The Local API token is **separate** from the WSS token. The API's own route
+table lists eleven read-only routes; this plugin calls exactly **two** of them:
+
+- `POST /rest_api/grind_log` with `{"limit":5000}` - grind history with recipe
+  data, matched to this plugin's grind events by `recipe_amount` and
+  `grind_date_time`;
+- `POST /rest_api/service_log` with `{"limit":500}` - the service/event rows
+  behind the `service-log` endpoint.
+
+The other nine - `capabilities`, `machine`, `alert_log`, `portafilters`,
+`recipes`, `settings`, `config`, `file` and `ws_token` - are not called. The
+plugin is **read-only**: it does not call the action layer at all. The contract
+defines no route for motor, calibration, ESP, firmware, pairing, user
+management, database download or any `GrinderAction`, and the plugin sends no
+state-changing request through the Local API - it only reads these two logs.
+Grind records and service rows are treated exactly like the ZIP path: bounded,
+redacted and kept in memory only.
+
+Both requests carry `X-E64-Local-Token` (plus the `PHPSESSID` cookie from the
+vendor REST session) and are pinned with `tlsPinSha256` when `certSha256` is
+set. The token is never written to a log, an error message or the diagnostics
+page.
 
 When `UseLocalApi` is enabled and a valid token is configured, the plugin will:
-- Use Local API endpoints for grind log and service log retrieval
-- Fall back to the vendor's `download_machine_logs` ZIP if Local API is unavailable
-- Continue using the standard WSS connection for real-time state updates
+- read the grind and service logs through those two routes;
+- fall back to the vendor's `download_machine_logs` ZIP when the Local API
+  fails, before the attempt counts as a failure;
+- keep using the standard WSS connection for real-time state updates.
 
 **Security notes:**
-- Local API requires both a vendor REST session AND the owner token
-- Sensitive data (Wi-Fi passwords, role credentials, cloud URLs) is redacted by the Local API module
-- The Local API is **read-only** - no motor, calibration, or state-changing actions are exposed
-- Only works on dev-mode devices
+- the Local API needs both a vendor REST session AND the owner token;
+- the device is expected to redact Wi-Fi passwords, role credentials and cloud
+  URLs; the plugin additionally redacts and truncates every field it keeps;
+- only dev-mode devices serve the API, and only devices with the Local API
+  module deployed answer it.
 
 See [mahlkoenig-e64ws-local-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/blob/main/docs/LOCAL_API.md) for the full API contract.
 
