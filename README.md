@@ -179,9 +179,16 @@ is.
 same downloads in ascending `event_id` order: `id`, `eventTypeId`, `eventType`,
 `eventDateTime` and `details`. Serial numbers, IP and MAC addresses, Wi-Fi names
 and passwords, session IDs, tokens, long hexadecimal IDs and email addresses are
-redacted from the text. Both endpoints report the download status under `log`
-(`ok`, `downloading`, `failed`, `suspended`, `unsupported-host` or
-`needs-mint-tokens`, with `lastAt`, `lastAttemptAt`, `lastError`). Everything is
+redacted from the text. Both endpoints report the download status under `log`:
+`status` (`ok`, `downloading`, `failed`, `suspended`, `unsupported-host`,
+`needs-mint-tokens`, or a Local API refusal - `unauthorized`, `forbidden`),
+`lastAt`, `lastAttemptAt`, `lastError`, and the Local API classification
+`errorClass` (`unauthorized`, `forbidden`, `conflict`, `unprocessable`,
+`rate-limited`, `unavailable` or `failed`), `retryable` and `retryAfterMs`. A
+401 or 403 sets `retryable` false, so the log stops attempting until the next
+connection rather than counting failures against a token that cannot work; a 429
+carries the device's `Retry-After` (delta-seconds or HTTP-date, capped at one
+hour) in `retryAfterMs`. Everything is
 held in memory only and bounded: 20 grind events and 500 service rows per
 instance. The plugin persists nothing and never keeps the ZIP or the CSV.
 

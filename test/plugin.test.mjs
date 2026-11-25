@@ -1008,7 +1008,8 @@ test('a Local API and ZIP failure together count one failure', async () => {
   assert.equal(h.downloads(), 1, 'the ZIP is still tried');
   const log = h.events().log;
   assert.equal(log.failures, 1, 'one attempt is one failure, not two');
-  assert.equal(log.status, 'failed');
+  assert.equal(log.status, 'unauthorized');
+  assert.equal(log.errorClass, 'unauthorized');
   await h.loaded.plugin.onUnload();
 });
 
@@ -1030,6 +1031,68 @@ test('a suspended log recovers on a later successful attempt', async () => {
   assert.equal(log.status, 'ok', 'a success lifts the suspension without a new connection');
   assert.equal(log.failures, 0, 'a successful request resets the counter');
   await h.loaded.plugin.onUnload();
+});
+
+test('Local API statuses are classified and a refusal is marked non-retryable', async () => {
+  for (const [status, errorClass, retryable] of [[401, 'unauthorized', false], [403, 'forbidden', false], [409, 'conflict', true],
+    [422, 'unprocessable', true], [429, 'rate-limited', true], [503, 'unavailable', true]]) {
+    const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+      route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'device says no'}, status) : null});
+    await h.connect();
+    await h.grind();
+    const log = h.events().log;
+    assert.equal(log.errorClass, errorClass, `HTTP ${status} class`);
+    assert.equal(log.retryable, retryable, `HTTP ${status} retryable`);
+    assert.equal(log.status, retryable ? 'failed' : errorClass, `HTTP ${status} status`);
+    assert.equal(log.lastError, `local api grind_log HTTP ${status}`, `HTTP ${status} message`);
+    await h.loaded.plugin.onUnload();
+  }
+});
+
+test('a refused Local API token stops the log until the next connection', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'no'}, 401) : null});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 1);
+  assert.equal(h.events().log.retryable, false);
+  await h.grind();
+  await h.advance(24 * 3600000);
+  assert.equal(h.localCalls('grind_log').length, 1, 'a refused token is not retried in the same session');
+  await h.disconnect();
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 2, 'the next connection retries once');
+  await h.loaded.plugin.onUnload();
+});
+
+test('a 429 honours Retry-After instead of the 6-hour idle refresh', async () => {
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+    route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'busy'}, 429, {'retry-after': '1800'}) : null});
+  await h.connect();
+  await h.grind();
+  const log = h.events().log;
+  assert.equal(log.errorClass, 'rate-limited');
+  assert.equal(log.retryAfterMs, 30 * 60000);
+  await h.grind();
+  await h.advance(29 * 60000);
+  assert.equal(h.localCalls('grind_log').length, 1, 'a grind does not jump the Retry-After queue');
+  await h.advance(2 * 60000);
+  assert.equal(h.localCalls('grind_log').length, 2, 'one retry once Retry-After has passed');
+  await h.loaded.plugin.onUnload();
+});
+
+test('Retry-After is capped and an unusable value falls back to the idle refresh', async () => {
+  for (const [header, expected] of [['999999', 3600000], ['soon', null], ['', null]]) {
+    const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', failDownloads: true,
+      route: (url) => url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'busy'}, 429, {'retry-after': header}) : null});
+    await h.connect();
+    await h.grind();
+    assert.equal(h.events().log.retryAfterMs, expected, `Retry-After ${JSON.stringify(header)}`);
+    assert.deepEqual(h.logTimers().map(([, timer]) => timer.delay), [expected === null ? 6 * 3600000 : expected],
+      `next attempt after ${JSON.stringify(header)}`);
+    await h.loaded.plugin.onUnload();
+  }
 });
 
 async function inventoryRun({decaid = decaidApi(), extra = {}, grinderType = 'E64 WS', connects = 1} = {}) {

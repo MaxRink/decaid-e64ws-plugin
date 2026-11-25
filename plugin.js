@@ -23,9 +23,10 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // Each machine-log download writes a ZIP to the grinder's /tmp and checkpoints
   // its SQLite WAL, so downloads are rare and bounded.
   const LOG_MIN_INTERVAL_MS = 10 * 60000, LOG_IDLE_REFRESH_MS = 6 * 3600000, LOG_CONNECT_DELAY_MS = 60000,
-    LOG_MAX_FAILURES = 3, LOG_REQUEST_TIMEOUT_MS = 20000, MAX_SERVICE_ROWS = 500;
+    LOG_MAX_FAILURES = 3, LOG_REQUEST_TIMEOUT_MS = 20000, LOG_RETRY_AFTER_MAX_MS = 3600000, MAX_SERVICE_ROWS = 500;
   // Local API v1: owner-authorized read-only endpoints on dev-mode devices
-  const LOCAL_API_ROUTES = ["grind_log", "service_log", "alert_log", "portafilters", "recipes", "settings", "config", "file", "ws_token"];
+  // The plugin only ever reads two of these: grind_log and service_log.
+  const LOCAL_API_STATUS = {401: "unauthorized", 403: "forbidden", 409: "conflict", 422: "unprocessable", 429: "rate-limited", 503: "unavailable"};
   // Diagnostics keep only these vendor fields. Serial numbers, session ids,
   // Wi-Fi credentials, cloud URLs and log messages never leave the plugin.
   const exposed = {
@@ -504,7 +505,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       control: {allowControl: config.allowControl, debugMode: config.allowControl ? "unprobed" : "disabled", probedAt: null,
         owner: config.owner, syncBacklight: config.syncBacklight, lastAction: null, lastBrewEvent: null},
       grindEvents: [], lastGrindState: null,
-      grindLog: {status: config.mintTokens ? "idle" : "needs-mint-tokens", lastAt: null, lastAttemptAt: null, lastError: null, failures: 0, nextAt: null, dueAt: null},
+      grindLog: {status: config.mintTokens ? "idle" : "needs-mint-tokens", lastAt: null, lastAttemptAt: null, lastError: null, failures: 0, nextAt: null, dueAt: null,
+        errorClass: null, retryable: true, retryAfterMs: null},
       serviceRows: [], logTimer: null, restToken: null, restCookie: null,
       inventory: {status: config.populateGrinder ? "pending" : "disabled", grinderId: null, model: null, archived: false, workflowLink: null, duplicates: 0, lastSyncAt: null, lastError: null},
       workflow: {enabled: config.populateGrinder && config.syncWorkflow, lastWriteAt: null, lastWriteMs: 0, lastWritten: null, lastError: null, writes: 0,
@@ -745,6 +747,9 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   function queueLogDownload(instance, delayMs) {
     const log = instance.grindLog;
     if (!instance.connected || !instance.config.mintTokens || log.status === "unsupported-host") return;
+    // A refusal (401/403) cannot be fixed by retrying the same token: park the log
+    // until the next connection or configuration change.
+    if (log.retryable === false) return;
     // A suspension is not fatal: it only stretches the next attempt to the idle
     // refresh, so one success can reset the counter without a new connection.
     const wait = log.status === "suspended" ? Math.max(delayMs, LOG_IDLE_REFRESH_MS) : delayMs;
@@ -770,22 +775,31 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       if (hasLocalApi(config)) {
         try {
           await downloadLogsLocalApi(instance);
-          Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0});
+          markLogOk(log);
           return;
         } catch (error) {
           localError = error;
         }
       }
       if (!await downloadLogsZip(instance, config)) { log.status = "unsupported-host"; return; }
-      Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0});
+      markLogOk(log);
     } catch (error) {
-      log.failures++;
       const cause = localError || error;
-      Object.assign(log, {status: log.failures >= LOG_MAX_FAILURES ? "suspended" : "failed",
+      const retryable = !(cause && cause.retryable === false);
+      log.failures++;
+      // Retry-After is a floor for every later attempt, including grind-triggered ones.
+      if (cause && typeof cause.retryAfterMs === "number") log.nextAt = Math.max(log.nextAt, Date.now() + cause.retryAfterMs);
+      Object.assign(log, {status: retryable ? (log.failures >= LOG_MAX_FAILURES ? "suspended" : "failed") : (cause.class || "failed"),
+        errorClass: cause && typeof cause.class === "string" ? cause.class : "failed",
+        retryable, retryAfterMs: cause && typeof cause.retryAfterMs === "number" ? cause.retryAfterMs : null,
         lastError: cause && /^(grind log|no matching|zip|inflate|login|local api)/.test(cause.message) ? cause.message : "grind log download failed"});
     } finally {
-      if (instance.epoch === epoch) queueLogDownload(instance, LOG_IDLE_REFRESH_MS);
+      if (instance.epoch === epoch) queueLogDownload(instance, typeof log.retryAfterMs === "number" ? log.retryAfterMs : LOG_IDLE_REFRESH_MS);
     }
+  }
+  function markLogOk(log) {
+    Object.assign(log, {status: "ok", lastAt: new Date().toISOString(), lastError: null, failures: 0,
+      errorClass: null, retryable: true, retryAfterMs: null});
   }
   // The vendor ZIP path. Returns false when the host cannot serve ZIPs at all,
   // which is a permanent per-host condition rather than a failure.
@@ -832,7 +846,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     }, "local api");
     // Fetch grind_log
     let response = await fetchJson("grind_log", {limit: 5000});
-    if (!response || !response.ok) throw new Error("local api grind_log HTTP " + (response ? response.status : "no response"));
+    if (!response || !response.ok) throw localApiStatusError("grind_log", response);
     let data = await response.json();
     if (!data.success || !data.data || !data.data.rows) throw new Error("local api grind_log: " + (data.error || "invalid response"));
     const rows = data.data.rows.map((row) => {
@@ -853,7 +867,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     }
     // Fetch service_log
     response = await fetchJson("service_log", {limit: MAX_SERVICE_ROWS});
-    if (!response || !response.ok) throw new Error("local api service_log HTTP " + (response ? response.status : "no response"));
+    if (!response || !response.ok) throw localApiStatusError("service_log", response);
     data = await response.json();
     if (!data.success || !data.data || !data.data.rows) throw new Error("local api service_log: " + (data.error || "invalid response"));
     mergeServiceRowsLocalApi(instance, data.data.rows);
@@ -927,6 +941,30 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   }
   function hasLocalApi(config) {
     return config.useLocalApi && config.staticLocalApiToken && config.localApiToken;
+  }
+  // A Local API status is classified so automations can tell a bad token from a
+  // busy device without parsing prose. 401/403 cannot be fixed by retrying the
+  // same token, so they never schedule another attempt.
+  function localApiStatusError(route, response) {
+    const status = response && Number.isInteger(response.status) ? response.status : 0;
+    const error = new Error("local api " + route + " HTTP " + (status || "no response"));
+    error.status = status;
+    error.class = LOCAL_API_STATUS[status] || "failed";
+    error.retryable = status !== 401 && status !== 403;
+    error.retryAfterMs = status === 429 ? retryAfterMs(response) : null;
+    return error;
+  }
+  // Retry-After is delta-seconds or an HTTP-date. Both are capped, so a broken or
+  // hostile device cannot park the schedule for days.
+  function retryAfterMs(response) {
+    const header = response && response.headers && typeof response.headers.get === "function" ? response.headers.get("retry-after") : null;
+    if (header === null || header === undefined || header === "") return null;
+    const text = String(header).trim();
+    let ms = null;
+    if (/^\d+$/.test(text)) ms = Number(text) * 1000;
+    else { const at = Date.parse(text); if (Number.isFinite(at)) ms = at - Date.now(); }
+    if (ms === null || !Number.isFinite(ms)) return null;
+    return Math.min(Math.max(ms, 0), LOG_RETRY_AFTER_MAX_MS);
   }
   // Rows as objects, newest first (highest grind_id), at most 20.
   function grindRows(text) {
@@ -1244,7 +1282,9 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       await request(instance, "state", true); schedule(instance, epoch);
       syncInventory(instance, epoch);
       // A new connection lifts a suspension and allows one idle refresh if none ran in 6 hours.
-      if (instance.grindLog.status === "suspended") Object.assign(instance.grindLog, {status: "idle", failures: 0});
+      if (instance.grindLog.status === "suspended" || instance.grindLog.retryable === false) {
+        Object.assign(instance.grindLog, {status: "idle", failures: 0, retryable: true, errorClass: null, retryAfterMs: null});
+      }
       const lastLog = Date.parse(instance.grindLog.lastAttemptAt);
       queueLogDownload(instance, Number.isFinite(lastLog) ? Math.max(LOG_CONNECT_DELAY_MS, lastLog + LOG_IDLE_REFRESH_MS - Date.now()) : LOG_CONNECT_DELAY_MS);
     } catch (error) {
