@@ -347,10 +347,15 @@ provide it:
 The E64 serves a self-signed certificate, so platform validation fails with
 `CERTIFICATE_VERIFY_FAILED`. Set the optional per-instance `certSha256` (64 hex
 characters, colons allowed) to pin it: the plugin passes it as `tlsPinSha256`
-to the login `fetch()` and the `wss` transport, and the host compares it with
-the SHA-256 of the leaf certificate. Without `certSha256` the plugin uses the
-host's platform trust store and does not bypass TLS. Hosts without pinning
-support ignore the option, so validation then falls back to the platform store.
+to the login `fetch()` and the `wss` transport. **The plugin sends the pin; only
+a host that implements `tlsPinSha256` compares it with the SHA-256 of the leaf
+certificate.** The Decaid builds inspected for this change forward only `url`,
+`method`, `headers` and `body` from a plugin `fetch()` (`_performFetch` in
+`plugin_manager.dart`), so they drop the option and validation falls back to the
+platform store — the setup assistant detects exactly that and reports
+`pin-unsupported`, and `?read=diagnostics` reports `tls.enforcedByHost`. Without
+`certSha256` the plugin uses the host's platform trust store and does not bypass
+TLS.
 The E64 serves the same certificate on every unit, with its private key in the
 firmware image: the pin proves "an E64 certificate", not this grinder, and is
 combined with the private-host restriction above. Do not install the
@@ -600,8 +605,9 @@ whether the host confirmed it, and the exact comparison the host performs), the
 staged connect steps with timings, and the error class. It is also shown in the
 `?ui=1` page. The bundle never contains a token, an Owner password, an auth
 header or a certificate body. `read=stages` returns the staged log lines;
-`&verbose=1` (or `"DebugLog": "true"` in the settings) adds the underlying error
-message and code, still redacted.
+`&verbose=1` (or the `DebugLog` setting, labelled "Verbose connection
+diagnostics", which is declared in the manifest so the host can save it) adds the
+underlying error message and code, still redacted.
 With no `read` parameter it returns last-known observations, including the
 latest polled `state`, which may remain available after disconnection; there is
 no separate `read=state`. Reconnecting starts a fresh observation set.

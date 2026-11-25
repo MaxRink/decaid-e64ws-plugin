@@ -2012,3 +2012,121 @@ test('certSha256 accepts the openssl line and explains a SHA-1 or short value in
     await assert.rejects(async () => load({InstancesJson: one('127.0.0.1', {certSha256: value}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 't'}})}, {sent: [], events: []}), pattern);
   }
 });
+
+// --- PR #19 review: the redaction guarantee has to survive hostile shapes ----
+function pluginWithNotices(devices, notices, fetchImpl) {
+  const host = {notify: (value) => { notices.push(value); return 'request'; }, dismissNotification: () => {},
+    devices: {register(definition, handlers) { devices.push({definition, handlers});
+      return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:e64:${definition.instanceId}`}); }}};
+  const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent, btoa: globalThis.btoa,
+    ...(fetchImpl ? {fetch: fetchImpl} : {})};
+  vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
+  return sandbox.createPlugin(host);
+}
+
+test('redaction survives an upper-cased token, a 3-character password, a bare credential and a truncated PEM block', async () => {
+  const token = 'tok-3f9a1c-sekrit', password = 'Q7z';
+  const devices = [], notices = [];
+  const plugin = pluginWithNotices(devices, notices);
+  // A static token plus a stored password: both are configured secrets for this instance.
+  await plugin.onLoad({InstancesJson: one('127.0.0.1', {certSha256: PIN}), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token}}),
+    MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password}}), PopulateGrinderRecord: 'false'});
+  // Everything a host or a device can do to the text, in one error: upper-case the
+  // token, echo a 3-character password, show a bare credential and truncate a PEM block.
+  const hostile = 'upgrade failed for ' + token.toUpperCase() + ' and ' + password +
+    ' with Basic dXNlcjpwYXNz and -----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIU';
+  let thrown = '';
+  const failing = {...transport({sent: [], events: []}), open: async () => { throw new Error(hostile); }};
+  await assert.rejects(async () => devices[0].handlers.connect({transport: failing, publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    thrown = error.message;
+    return true;
+  });
+  const read = async (query) => (await plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET',
+    query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', ...query}})).body;
+  const surfaces = {
+    'thrown error': thrown,
+    notification: notices.map((notice) => notice.message || '').join('\n'),
+    'read=diagnostics': await read({read: 'diagnostics'}),
+    'read=stages verbose': await read({read: 'stages', verbose: '1'}),
+    'read=connection': await read({read: 'connection'}),
+    'diagnostics page': await read({ui: '1'}),
+  };
+  for (const [name, text] of Object.entries(surfaces)) {
+    assert.equal(text.toUpperCase().includes(token.toUpperCase()), false, name + ' has no token, whatever its case');
+    assert.equal(text.includes(password), false, name + ' has no short password');
+    assert.equal(text.includes('dXNlcjpwYXNz'), false, name + ' has no bare Basic credential');
+    assert.equal(/BEGIN CERTIFICATE|MIIBszCCAVmg/.test(text), false, name + ' has no certificate body');
+    assert.equal(/basic\s+[A-Za-z0-9+/=]{8,}/i.test(text), false, name + ' has no unredacted scheme value');
+    assert.match(text, /\[redacted\]/, name + ' shows the redaction');
+  }
+  await plugin.onUnload();
+});
+
+test('a 100 kB device error cannot inflate the message, the notification or the bundle', async () => {
+  const huge = 'x'.repeat(100 * 1000) + ' END';
+  const devices = [], notices = [];
+  const plugin = pluginWithNotices(devices, notices);
+  await plugin.onLoad({InstancesJson: one('127.0.0.1'), TokensJson: JSON.stringify({one: {host: '127.0.0.1', token: 'static'}}), PopulateGrinderRecord: 'false'});
+  let thrown = '';
+  const failing = {...transport({sent: [], events: []}), open: async () => { throw new Error(huge); }};
+  await assert.rejects(async () => devices[0].handlers.connect({transport: failing, publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    thrown = error.message;
+    return true;
+  });
+  assert.ok(thrown.length <= 1200, 'the thrown message is bounded, got ' + thrown.length);
+  const longest = Math.max(...notices.map((notice) => (notice.message || '').length));
+  assert.ok(longest <= 1250, 'a notification is bounded, got ' + longest);
+  const body = async (read) => (await plugin.handleHttpRequest({endpoint: 'e64-diagnostics', method: 'GET',
+    query: {deviceId: 'plugin:mahlkoenig-e64.reaplugin:e64:one', read}})).body;
+  const bundle = await body('diagnostics');
+  assert.ok(bundle.length < 6000, 'the bundle is bounded, got ' + bundle.length);
+  const connection = await body('connection');
+  assert.ok(connection.length < 6000, 'the connection read is bounded, got ' + connection.length);
+  await plugin.onUnload();
+
+  // The login path is bounded too, not only the websocket path.
+  const loginDevices = [], loginNotices = [];
+  const loginPlugin = pluginWithNotices(loginDevices, loginNotices, async () => { throw new Error(huge); });
+  await loginPlugin.onLoad({InstancesJson: one('127.0.0.1'), TokensJson: '{}', MintTokens: 'true', PopulateGrinderRecord: 'false',
+    PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})});
+  let loginThrown = '';
+  await assert.rejects(async () => loginDevices[0].handlers.connect({transport: transport({sent: [], events: []}), publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    loginThrown = error.message;
+    return true;
+  });
+  assert.ok(loginThrown.length <= 1200, 'the thrown login message is bounded, got ' + loginThrown.length);
+  const longestLogin = Math.max(...loginNotices.map((notice) => (notice.message || '').length));
+  assert.ok(longestLogin <= 1250, 'the login notification is bounded, got ' + longestLogin);
+  await loginPlugin.onUnload();
+});
+
+test('the manifest declares every setting the code reads, so the host can save it', () => {
+  const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  // Declaring the Local API keys belongs to the Local API change (#17/#18); this
+  // test enforces every other key the code parses as JSON text.
+  const pendingLocalApi = ['ApiTokensJson', 'UseLocalApi'];
+  const read = [...new Set([...source.matchAll(/jsonSetting\(settings, "([A-Za-z][A-Za-z0-9]*)"/g)].map((match) => match[1]))];
+  assert.ok(read.includes('DebugLog'), 'the code reads DebugLog');
+  for (const key of read) {
+    if (pendingLocalApi.includes(key) && !manifest.settings[key]) continue;
+    assert.ok(manifest.settings[key], key + ' is declared in the manifest, so the host can save it');
+  }
+  const debugLog = manifest.settings.DebugLog;
+  assert.equal(debugLog.type, 'enum', 'jsonSetting parses JSON text, so the switch is an enum of strings');
+  assert.deepEqual(debugLog.values, ['false', 'true']);
+  assert.equal(debugLog.default, 'false', 'verbose diagnostics stay off unless the user turns them on');
+});
+
+test('a certificate failure says verification failed instead of claiming it never ran', async () => {
+  const fixture = {sent: [], events: []};
+  const loaded = await load({
+    InstancesJson: JSON.stringify([{id: 'one', name: 'One', host: '127.0.0.1', port: 9997, pollMs: 0, certSha256: PIN}]),
+    TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}})
+  }, fixture, {}, async () => { throw new Error('HandshakeException: CERTIFICATE_VERIFY_FAILED: self signed certificate'); });
+  await assert.rejects(async () => loaded.registrations[0].handlers.connect({transport: transport(fixture), publish: async () => {}, reportDisconnected: async () => {}}), (error) => {
+    assert.match(error.message, /verification of the grinder's certificate failed/);
+    assert.equal(/did not verify/.test(error.message), false, 'verification ran and failed');
+    return true;
+  });
+  await loaded.plugin.onUnload();
+});
