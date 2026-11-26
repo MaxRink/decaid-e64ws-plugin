@@ -481,7 +481,7 @@ See [docs/XENIA_MODE.md](docs/XENIA_MODE.md).
 
 ## Installation
 
-Version 0.7.6 requires a Decaid build containing the read-only Grinder observation
+Version 0.8.0 requires a Decaid build containing the read-only Grinder observation
 contract from #973 and the plugin `notifications` permission (#1003), and tracks upstream Decaid
 `main` (verified against `1d74fbf7` on 2026-11-23), in addition to runtime-v2 and validated device
 surfaces. `certSha256` pinning needs a host with `tlsPinSha256` support; older hosts ignore it. The stable `0.8.8` release has not been
@@ -493,7 +493,8 @@ are `"true"`/`"false"` choices, so existing values carry over. `restPort`
 overrides the HTTPS login port (default 443) for tunnels and simulators.
 
 Use Decaid's GitHub-release installer for stable installations. Each release
-contains one installable ZIP, and its tag matches the manifest version:
+ships the upstream ZIP, plus a separate `-fork` ZIP for hosts that run the fork;
+the tag matches the manifest version:
 
 ```bash
 curl -X POST http://decaid-host:8080/api/v1/plugins/install/github-release \
@@ -665,10 +666,12 @@ custom TOFU/pinning/reset support is a separate host proposal.
 ## Releases
 
 Install the latest [GitHub release](https://github.com/MaxRink/decaid-e64ws-plugin/releases)
-through Decaid’s plugin installer. Each release has exactly one flat ZIP with the
-manifest, runtime plugin and licence notices. The tag must match the manifest
-version. Subsequent releases require a version bump in the manifest, package and
-lockfile.
+through Decaid’s plugin installer. Each release ZIP is flat, with the manifest,
+runtime plugin and licence notices at its root, and carries a build-time release
+channel: the upstream artefact as `decaid-e64ws-plugin-<version>.zip`, the
+fork-only one as `decaid-e64ws-plugin-<version>-fork.zip`. The tag must match the
+manifest version. Subsequent releases require a version bump in the manifest,
+package and lockfile, which `scripts/package-plugin.py` enforces.
 
 The tag-triggered release workflow reruns the complete repository CI and publishes
 the tested archive only after all jobs pass. `npm run package` produces a
