@@ -1,6 +1,6 @@
 # Mahlkönig WebSocket grinders — Decaid plugin
 
-[![CI](https://github.com/MaxRink/decaid-e64ws-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/MaxRink/decaid-e64ws-plugin/actions/workflows/ci.yml)
+[![CI](https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/actions/workflows/ci.yml)
 
 **Tested today:** E64 WS, on a real unit. **Expected, untested:** E64 TS and the
 NG2 GbS models (E65T, E65W, E80T, E80W GbS); every other model in
@@ -411,7 +411,7 @@ On **dev-mode devices only** (development image where the first word of `/etc/is
 
 To enable Local API support:
 
-1. **Deploy the Local API module** to the device using `e64root api deploy` (see [mahlkoenig-e64ws-local-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/blob/main/docs/LOCAL_API.md))
+1. **Deploy the Local API module** to the device using `e64root api deploy` (see [mahlkoenig-grinder-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-grinder-research/blob/main/docs/LOCAL_API.md))
 2. **Configure the plugin** in the Mahlkönig WebSocket grinders settings dialog (Decaid's **Plugins** settings). Both fields are declared in `manifest.json`, so both appear in that one dialog like every other declared setting:
    - `UseLocalApi` ("Use the Local API") - an ordinary enum setting, `Off` by default; set it to `On`;
    - `ApiTokensJson` ("Grinder Local API tokens") - a **secure** string setting; set it to
@@ -465,7 +465,7 @@ When `UseLocalApi` is enabled and a valid token is configured, the plugin will:
 - only dev-mode devices serve the API, and only devices with the Local API
   module deployed answer it.
 
-See [mahlkoenig-e64ws-local-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/blob/main/docs/LOCAL_API.md) for the full API contract.
+See [mahlkoenig-grinder-research/docs/LOCAL_API.md](https://github.com/MaxRink/mahlkoenig-grinder-research/blob/main/docs/LOCAL_API.md) for the full API contract.
 
 ## Xenia mode
 
@@ -498,7 +498,7 @@ contains one installable ZIP, and its tag matches the manifest version:
 ```bash
 curl -X POST http://decaid-host:8080/api/v1/plugins/install/github-release \
   -H 'content-type: application/json' \
-  -d '{"repo":"MaxRink/decaid-e64ws-plugin"}'
+  -d '{"repo":"MaxRink/decaid-mahlkoenig-websocket-grinder-plugin"}'
 ```
 
 For development builds, the GitHub-branch installer tracks the public `main`
@@ -507,7 +507,7 @@ branch:
 ```bash
 curl -X POST http://decaid-host:8080/api/v1/plugins/install/github-branch \
   -H 'content-type: application/json' \
-  -d '{"repo":"MaxRink/decaid-e64ws-plugin","branch":"main"}'
+  -d '{"repo":"MaxRink/decaid-mahlkoenig-websocket-grinder-plugin","branch":"main"}'
 ```
 
 The Decaid Plugins screen can also install the ZIP or folder as a local
@@ -664,7 +664,7 @@ custom TOFU/pinning/reset support is a separate host proposal.
 
 ## Releases
 
-Install the latest [GitHub release](https://github.com/MaxRink/decaid-e64ws-plugin/releases)
+Install the latest [GitHub release](https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/releases)
 through Decaid’s plugin installer. Each release has exactly one flat ZIP with the
 manifest, runtime plugin and licence notices. The tag must match the manifest
 version. Subsequent releases require a version bump in the manifest, package and

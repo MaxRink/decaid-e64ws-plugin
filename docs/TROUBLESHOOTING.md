@@ -47,9 +47,9 @@ not — match on the stage name, never on the prose.
 
 Before this existed, a failed connect produced one generic message — "check the
 Owner password, certSha256 and the grinder address" — and nothing to act on. That
-is [issue #16](https://github.com/MaxRink/decaid-e64ws-plugin/issues/16), and the
+is [issue #16](https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/issues/16), and the
 staged reporting described here is the work that closes it
-([PR #19](https://github.com/MaxRink/decaid-e64ws-plugin/pull/19)). On a build
+([PR #19](https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/pull/19)). On a build
 without it, this page still applies: the checkpoints below are the same ones the
 plugin now names for you, they just have to be walked by hand.
 

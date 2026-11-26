@@ -138,7 +138,38 @@ persists, a protocol fact, or a separate decision.
 | Grinder record defaults `Mahlkönig E64 WS`, `64 mm flat (stock)` | Describes the *grinder record* this plugin creates, and the README already tells E64 TS and NG2 owners to rename it in Decaid. |
 | `PopulateGrinderRecord` description: "an existing E64 record adopted" | Still literally true: the adoption rule matches records whose model contains `E64`. Generalising the sentence would describe behaviour the code does not have. |
 | Error prefixes (`E64 configuration error`, `E64 connection failed`, `E64 unavailable`, …) | Protocol-scoped diagnostics text, not a display name; roughly two dozen strings and their assertions. Candidate for a separate change. |
-| Repository name `decaid-e64ws-plugin` | Renaming the GitHub repository would break the README badge, the installer URLs documented in the README, the research repository's cross-links and the CI references. Separate decision. |
+| Release artifact name `dist/decaid-e64ws-plugin-<version>.zip` | The download filename users already hold, asserted in `scripts/package-plugin.py`, `.github/workflows/ci.yml` and `test/package_channels_test.py`. A repository rename does not change it; see below. |
+
+## The repository name
+
+The GitHub repository is renamed to
+**`decaid-mahlkoenig-websocket-grinder-plugin`**, which is the last surface that
+still claimed one model. The repository name was deferred when the display name
+changed, because the badge, the installer URLs, the research repository's
+cross-links and the CI `repository:` references all carry it; that follow-up is
+this change.
+
+What moves: the badge and every `github.com/MaxRink/decaid-e64ws-plugin` URL in
+this repository (README, `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/config.yml`,
+`docs/SETUP.md`, `docs/TROUBLESHOOTING.md`, the two `plugin.js` Help links), the
+installer JSON bodies, and the cross-links to the research repository, whose own
+rename to `mahlkoenig-grinder-research` is prepared alongside this one
+(`README.md`, `CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE/config.yml`,
+`.github/workflows/ci.yml`, `docs/ASSETS.md`, `docs/LIVE_VALIDATION.md`).
+
+What does not move, and why:
+
+| Kept | Why |
+| ---- | --- |
+| `manifest.json` `id` and every id below it | Unchanged from the display-name rename; see [The id is a historical artefact](#the-id-is-a-historical-artefact). |
+| `package.json` `name` = `mahlkoenig-e64-reaplugin` | Still mirrors the frozen id, not the repository. |
+| Release artifact name `decaid-e64ws-plugin-<version>.zip` | A download filename, not a repository reference. Renaming it is a separate packaging decision with its own test assertions. |
+| The local checkout directory `decaid-e64ws-plugin` | Sibling-path defaults in the research repository and in `decaid-assisted-dialin-plugin` resolve against the directory name, not the repository name. Renaming the directory is a local change, not part of this one. |
+
+GitHub redirects the old full name to the new one, so clones, web links, issue
+and pull-request URLs and the CI badge keep resolving. The redirect is a
+courtesy, not a contract: it is dropped if anybody later creates a repository
+under the old name, and this repository should not depend on it.
 
 ## The id is a historical artefact
 

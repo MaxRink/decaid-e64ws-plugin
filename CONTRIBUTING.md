@@ -19,11 +19,11 @@ Renaming anything that functions as an identity is a migration, not an edit. The
 | Coffee catalog facts | [Catalog correction](https://github.com/MaxRink/decaid-assisted-dialin-plugin/issues/new?template=coffee-catalog-correction.yml) |
 | An improvement or integration proposal | [Feature form](https://github.com/MaxRink/decaid-assisted-dialin-plugin/issues/new?template=feature-request.yml) |
 | Skale device/Bluetooth behavior | [Skale issues](https://github.com/MaxRink/decaid-skale-plugin/issues/new/choose) |
-| E64 WS connection, protocol or grinder mock | [E64 WS issues](https://github.com/MaxRink/decaid-e64ws-plugin/issues/new/choose) |
-| Recovered E64 firmware implementation | [Research issues](https://github.com/MaxRink/mahlkoenig-e64ws-local-research/issues/new/choose) |
+| E64 WS connection, protocol or grinder mock | [E64 WS issues](https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/issues/new/choose) |
+| Recovered E64 firmware implementation | [Research issues](https://github.com/MaxRink/mahlkoenig-grinder-research/issues/new/choose) |
 | Host beans, shot capture or device APIs | [Decaid issues](https://github.com/decentespresso/decaid/issues) and [discussions](https://github.com/decentespresso/decaid/discussions) |
 | Streamline navigation or skin integration | [Streamline issues](https://github.com/decentespresso/streamline-js/issues) |
-| A security vulnerability | [Private report](https://github.com/MaxRink/decaid-e64ws-plugin/security/advisories/new) |
+| A security vulnerability | [Private report](https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/security/advisories/new) |
 
 The plugin and [website](https://maxrink.github.io/decaid-assisted-dialin-plugin/simulator/) link to these forms through Help. Opening a form does not submit a report or attach your saved coffee/grinder data. GitHub issues are public; review what you attach.
 

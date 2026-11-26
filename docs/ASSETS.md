@@ -69,7 +69,7 @@ Two consequences worth stating plainly:
 | `docs/assets/setup/05-grind-and-workflow.png` | Step 5, adjustment owner and the three switches | same script | Yes — same |
 | `docs/assets/setup/06-review-and-save.png` | Step 7, review summary | same script, reached by clicking through steps 1–7 | Yes — same |
 | `docs/assets/setup/07-diagnostics.png` | Diagnostics page, one connected instance | same script, `plugin.js` connected to `tools/e64-mock-server.mjs` (loopback, mock grinder type "E64 WS mock one") | Yes — same |
-| `docs/assets/grinder/main-menu.png` | The grinder's main menu | copied from `MaxRink/mahlkoenig-e64ws-local-research` at commit `395cb32388d09c691d306569bf2bd3365b986dc8`, file `tools/qml/shots/MainMenu.png` | No — vendor-derived, see below |
+| `docs/assets/grinder/main-menu.png` | The grinder's main menu | copied from `MaxRink/mahlkoenig-grinder-research` at commit `395cb32388d09c691d306569bf2bd3365b986dc8`, file `tools/qml/shots/MainMenu.png` | No — vendor-derived, see below |
 | `docs/assets/grinder/grind-screen.png` | The grinder's grind screen | same commit, `tools/qml/shots/GrindScreen.png` | No — vendor-derived, see below |
 | `docs/assets/grinder/recipe-statistics.png` | The grinder's recipe statistics | same commit, `tools/qml/shots/StatisticsMenu.png` | No — vendor-derived, see below |
 | `docs/assets/grinder/connectivity.png` | The grinder's Connectivity screen | same commit, `tools/qml/shots/ConnectivityMenu.png` | No — vendor-derived, see below |

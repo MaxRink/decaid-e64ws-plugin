@@ -998,7 +998,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     try {
       if (failure === null) host.dismissNotification(id);
       else host.notify({id, message: "E64 " + instance.config.name + ": " + loginDiagnosis(failure, instanceSecrets(instance), Infinity),
-        action: {id: "help", label: "Help", type: "openExternalUrl", url: "https://github.com/MaxRink/decaid-e64ws-plugin/blob/main/docs/TROUBLESHOOTING.md"}});
+        action: {id: "help", label: "Help", type: "openExternalUrl", url: "https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/blob/main/docs/TROUBLESHOOTING.md"}});
     } catch (_) {}
   }
   // A grind is complete when the state leaves the grind family. The grind UUID
@@ -1710,7 +1710,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     try {
       if (diagnosis === null) host.dismissNotification(id);
       else host.notify({id, message: "E64 " + instance.config.name + ": " + diagnosis.replace(/^E64 /, ""),
-        action: {id: "help", label: "Help", type: "openExternalUrl", url: "https://github.com/MaxRink/decaid-e64ws-plugin/blob/main/docs/TROUBLESHOOTING.md"}});
+        action: {id: "help", label: "Help", type: "openExternalUrl", url: "https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/blob/main/docs/TROUBLESHOOTING.md"}});
     } catch (_) {}
   }
   async function connect(instance, context) {

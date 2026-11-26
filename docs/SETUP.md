@@ -69,7 +69,7 @@ Pick one:
 ```bash
 curl -sS -X POST http://<decaid-host>:8080/api/v1/plugins/install/github-release \
   -H 'content-type: application/json' \
-  -d '{"repo":"MaxRink/decaid-e64ws-plugin"}'
+  -d '{"repo":"MaxRink/decaid-mahlkoenig-websocket-grinder-plugin"}'
 ```
 
 **Branch installer** (tracks public `main`):
@@ -77,7 +77,7 @@ curl -sS -X POST http://<decaid-host>:8080/api/v1/plugins/install/github-release
 ```bash
 curl -sS -X POST http://<decaid-host>:8080/api/v1/plugins/install/github-branch \
   -H 'content-type: application/json' \
-  -d '{"repo":"MaxRink/decaid-e64ws-plugin","branch":"main"}'
+  -d '{"repo":"MaxRink/decaid-mahlkoenig-websocket-grinder-plugin","branch":"main"}'
 ```
 
 **Local ZIP or folder**, for a development build: **Decaid → Settings →
@@ -374,7 +374,7 @@ Do not start from a message. Find the stage that failed — installed, settings
 valid, network, certificate, login, socket, data — and only then look at what
 that stage reports. [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) is written that
 way, and points at the diagnostics work in
-[issue #16](https://github.com/MaxRink/decaid-e64ws-plugin/issues/16) for the
+[issue #16](https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/issues/16) for the
 per-stage error surfacing that is still missing.
 
 ## Where everything lives
