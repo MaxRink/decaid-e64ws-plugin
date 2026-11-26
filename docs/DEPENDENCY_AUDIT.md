@@ -24,17 +24,38 @@ them; a truncated SHA cannot be compared to a `git/ref/tags` reply.
 
 ## Current pins
 
-This repository has exactly one npm dependency and no containers, no Python
-requirements and no Gradle build, so Dependabot's `npm` and `github-actions`
-entries are the complete surface.
+This repository has one npm dependency and one Python test requirement, and no
+containers and no Gradle build, so Dependabot's `npm`, `pip` and
+`github-actions` entries are the complete surface.
 
 | Dependency | Pinned | Latest stable | Status |
 | --- | --- | --- | --- |
 | `@playwright/test` (dev) | 1.65.1 | 1.65.1 | up to date |
+| `PyYAML` (test) | ≥6.0.2,<7 | 6.0.4 | up to date |
 
 `package-lock.json` (lockfileVersion 3) resolves the single dev dependency tree —
 `@playwright/test` 1.65.1 → `playwright` 1.65.1 → `playwright-core` 1.65.1 — all
 three at the current release, so the lockfile does not hold anything back either.
+
+### The Python requirement
+
+`requirements-dev.txt` arrived with the 0.8.0 release preparation. It declares
+PyYAML alone, and it is test-only: a release is cut from the names in
+`scripts/package-plugin.py`'s `FILES` tuple, which does not include this file.
+It is still tracked by Dependabot because it is load-bearing — the release gate
+fails without it, rather than skipping:
+
+- `test/release_assets_test.py::PublishStepRuntimeTests` loads the publish step
+  out of `.github/workflows/release.yml` with `yaml.safe_load` and runs it under
+  `bash` against a stub `gh`, which is the only proof that a release attaches one
+  archive per channel;
+- `ci.yml` runs `python3 -m pip install -r requirements-dev.txt` before that
+  suite, and `release_assets_test.py` asserts both that CI installs it and that
+  the file names PyYAML, so removing either half fails the suite;
+- the file's own constraint is `>=6.0.2,<7`. 6.0.4 is the current release, so the
+  range already resolves to it and nothing is held back. The `<7` ceiling is what
+  keeps a future major off this branch, which is why there is no `ignore` entry
+  for it in `.github/dependabot.yml`.
 
 ## Dependabot PRs
 
