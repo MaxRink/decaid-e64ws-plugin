@@ -294,3 +294,75 @@ jobs:
           export LD_LIBRARY_PATH="$QUICKJS_LIB_DIR:${LD_LIBRARY_PATH:-}"
           cp ../ci/host_sim_test.dart test/plugins/e64_external_sim_test.dart
           flutter test test/plugins/e64_external_sim_test.dart test/plugins/plugin_tls_pin_test.dart
+
+  upstream-channel:
+    name: Upstream channel and pinned host
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the pinned upstream host (no Flutter required)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: decentespresso/decaid
+          ref: 1d74fbf7a5eb3a5ba5208b4147aea136726a4909
+          path: decaid
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Plugin suite, including the upstream and fork host stubs
+        run: npm test
+      - name: Release channel packaging tests
+        run: python3 test/package_channels_test.py
+      - name: The pinned upstream ref still ignores the fork-only options
+        run: |
+          set -euo pipefail
+          cd decaid
+          for option in tlsPinSha256 responseType requestCancellation; do
+            if grep -rq "$option" lib/; then
+              echo "::error::$option is implemented at the pinned upstream ref now; re-read docs/UPSTREAM_COMPATIBILITY.md and re-gate it before releasing"
+              exit 1
+            fi
+          done
+          echo 'the pinned upstream ref still drops tlsPinSha256, responseType and requestCancellation'
+      - name: Cut both release channels from one source
+        run: |
+          set -euo pipefail
+          version=$(python3 -c "import json;print(json.load(open('manifest.json'))['version'])")
+          npm run package
+          npm run package -- --channel fork
+          test -f "dist/decaid-e64ws-plugin-${version}.zip"
+          test -f "dist/decaid-e64ws-plugin-${version}-fork.zip"
+          rm -rf /tmp/e64-upstream /tmp/e64-fork
+          unzip -q "dist/decaid-e64ws-plugin-${version}.zip" -d /tmp/e64-upstream
+          unzip -q "dist/decaid-e64ws-plugin-${version}-fork.zip" -d /tmp/e64-fork
+      - name: The upstream artefact advertises no fork-only facility
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          up = json.loads(Path('/tmp/e64-upstream/manifest.json').read_text())
+          fork = json.loads(Path('/tmp/e64-fork/manifest.json').read_text())
+          assert 'surfaces' not in up, 'the upstream artefact must not ship a setup surface no host renders'
+          assert 'surfaces' in fork, 'the fork artefact keeps the surfaces the source tree declares'
+          description = up['settings']['InstancesJson']['description']
+          assert 'fork build' in description, 'the upstream artefact must not offer pinning as if the host provided it'
+          assert up['api'] == fork['api'], 'both channels keep the same api endpoints'
+          assert up['permissions'] == fork['permissions'], 'both channels keep the same permissions'
+          print('upstream artefact: no setup surface, and pinning points at the fork build')
+          PY
+      - name: The packaged upstream file is the one the suite proves
+        env:
+          E64_PLUGIN_SOURCE: /tmp/e64-upstream/plugin.js
+          E64_EXPECT_CHANNEL: upstream
+        run: node --test test/host-capabilities.test.mjs
+      - name: The packaged fork file keeps the fork-only facilities
+        env:
+          E64_PLUGIN_SOURCE: /tmp/e64-fork/plugin.js
+          E64_EXPECT_CHANNEL: fork
+        # The whole suite, so the ZIP/responseType and pin paths are proven on the
+        # shipped file rather than on the source tree.
+        run: npm test
