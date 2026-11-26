@@ -674,7 +674,7 @@ manifest version. Subsequent releases require a version bump in the manifest,
 package and lockfile, which `scripts/package-plugin.py` enforces.
 
 The tag-triggered release workflow reruns the complete repository CI and publishes
-the tested archive only after all jobs pass. `npm run package` produces a
+both tested archives only after all jobs pass. `npm run package` produces a
 deterministic archive under `dist/`; documentation, mocks and CI fixtures remain
 in the repository. CI proves synthetic software behavior, not physical hardware
 or firmware compatibility. The 2026-11-18 live pass is a read-only runtime
@@ -742,6 +742,13 @@ Rules for the owner:
   `package-lock.json`; both channels share it, so tag the release with it and
   attach the artefact you intend to ship.
 - **Both channels stay on disk.** Cutting one does not delete the other.
+- **Both channels are published.** The release workflow verifies the pair before
+  it attaches them: entry set, manifest version, each archive's own
+  `PLUGIN_CHANNEL` marker against its filename, the contents this tree produces
+  for that channel, and the single documented manifest difference between the
+  two. The check is `scripts/release_assets.py`; `test/release_assets_test.py`
+  and the `upstream-channel` CI job run it, so a release cannot attach one
+  artefact while claiming two.
 
 The channel is also visible to support in the diagnostics output above
 (`capabilities.channel`), so a report can be classified without guessing.

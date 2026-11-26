@@ -29,32 +29,27 @@ jobs:
         with:
           name: decaid-e64ws-plugin-${{ github.sha }}
           path: dist
-      - name: Verify and publish the tested archive
+      - name: Verify and publish the tested archives
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
-          import hashlib, json, os, pathlib, zipfile
+          import json, os, pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import release_assets
           version = json.loads(pathlib.Path('manifest.json').read_text())['version']
           assert os.environ['GITHUB_REF_NAME'].removeprefix('v') == version
-          archives = list(pathlib.Path('dist').glob('*.zip'))
-          assert len(archives) == 1, 'exactly one plugin ZIP is required'
-          with zipfile.ZipFile(archives[0]) as package:
-              assert set(package.namelist()) == {'manifest.json', 'plugin.js', 'README.md', 'NOTICE', 'LICENSE'}
-              assert package.testzip() is None
-              assert json.loads(package.read('manifest.json'))['version'] == version
-              for name in package.namelist():
-                  assert package.read(name) == pathlib.Path(name).read_bytes(), name
-          digest = hashlib.sha256(archives[0].read_bytes()).hexdigest()
-          pathlib.Path('release-notes.md').write_text(
-              f'Install the single ZIP below through Decaid’s plugin installer, or use this repository URL.\n\n'
-              f'The tag matches manifest version {version}. Complete CI passed, including protocol/mock and HTTP API contracts, '
-              f'the Decaid host package/runtime contract against upstream main, and the Linux app smoke against pinned upstream main 1d74fbf7.\n\n'
-              f'Physical hardware and firmware compatibility remain unvalidated; '
-              f'CI uses synthetic devices and cannot establish physical-device support.\n\n'
-              f'SHA-256 ({archives[0].name}): `{digest}`\n'
-          )
+          # One archive per channel, each checked against the contents this tree
+          # produces for it: entry set, integrity, manifest version, its own
+          # PLUGIN_CHANNEL marker against its filename, and the single documented
+          # manifest difference between the two channels. Raises instead of
+          # publishing a partial set, so a release cannot attach one channel.
+          entries = release_assets.verify(pathlib.Path('dist'), pathlib.Path('.'))
+          pathlib.Path('release-notes.md').write_text(release_assets.release_notes(entries, version))
+          for entry in entries:
+              print(f"{entry['name']}: {entry['channel']} channel, {entry['size']} bytes, {entry['sha256']}")
           PY
           gh release create "$GITHUB_REF_NAME" dist/*.zip --verify-tag \
             --title "Mahlkönig WebSocket grinders $GITHUB_REF_NAME" --notes-file release-notes.md

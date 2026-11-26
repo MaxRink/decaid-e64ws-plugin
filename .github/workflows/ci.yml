@@ -27,9 +27,13 @@ jobs:
       - run: npm test
       - run: node --check plugin.js
       - run: bash -n scripts/run-dev-smoke.sh
+      # Both channels, because a release attaches both: the upload below is what
+      # publish downloads, and release_assets_test.py refuses a one-archive set.
       - run: npm run package
+      - run: npm run package -- --channel fork
       - run: python3 -m unittest discover -s test -p package_plugin_test.py
       - run: python3 -m unittest discover -s test -p test_xenia_bridge.py
+      - run: python3 -m unittest discover -s test -p release_assets_test.py
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: matrix.node == 24
         with:
@@ -338,21 +342,19 @@ jobs:
           rm -rf /tmp/e64-upstream /tmp/e64-fork
           unzip -q "dist/decaid-e64ws-plugin-${version}.zip" -d /tmp/e64-upstream
           unzip -q "dist/decaid-e64ws-plugin-${version}-fork.zip" -d /tmp/e64-fork
-      - name: The upstream artefact advertises no fork-only facility
+      - name: Both artefacts are the tested ones, one per channel
+        # The same check the release publish step runs, on every PR, from the
+        # module scripts/release_assets.py: the set, each archive's own
+        # PLUGIN_CHANNEL marker, the contents this tree produces per channel, and
+        # the single documented manifest difference between the two.
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json
-          from pathlib import Path
-          up = json.loads(Path('/tmp/e64-upstream/manifest.json').read_text())
-          fork = json.loads(Path('/tmp/e64-fork/manifest.json').read_text())
-          assert 'surfaces' not in up, 'the upstream artefact must not ship a setup surface no host renders'
-          assert 'surfaces' in fork, 'the fork artefact keeps the surfaces the source tree declares'
-          description = up['settings']['InstancesJson']['description']
-          assert 'fork build' in description, 'the upstream artefact must not offer pinning as if the host provided it'
-          assert up['api'] == fork['api'], 'both channels keep the same api endpoints'
-          assert up['permissions'] == fork['permissions'], 'both channels keep the same permissions'
-          print('upstream artefact: no setup surface, and pinning points at the fork build')
+          import pathlib, sys
+          sys.path.insert(0, 'scripts')
+          import release_assets
+          for entry in release_assets.verify(pathlib.Path('dist'), pathlib.Path('.')):
+              print(f"{entry['name']}: {entry['channel']} channel, {entry['size']} bytes, {entry['sha256']}")
           PY
       - name: The packaged upstream file is the one the suite proves
         env:

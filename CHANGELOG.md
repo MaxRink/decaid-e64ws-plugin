@@ -113,6 +113,13 @@ endpoints and permissions.
   comparing it. The capability probe now asks with a malformed pin and reports
   `pin-unsupported`; the bundle reports `tls.enforcedByHost` as unknown,
   enforced or not enforced instead of asserting a comparison that never happens.
+- **A release now attaches both artefacts.** The publish step verifies the pair
+  instead of assuming one archive: each ZIP's entry set, manifest version, its
+  own `PLUGIN_CHANNEL` marker against its filename, the contents this tree
+  produces for that channel, and the single documented manifest difference
+  between the two (`scripts/release_assets.py`). Installation needs the ZIP that
+  matches the host, so a release that shipped one while claiming two would have
+  made the CHANGELOG wrong.
 - `npm test` now runs five suites (plugin, mock-server, identity, docs,
   host-capabilities) instead of two.
 - `README.md`: new compatibility section, the upstream/fork install choice, and
