@@ -42,9 +42,9 @@ endpoints and permissions.
 - **The Local API log path is reachable** (#23). The service already read
   `UseLocalApi` and `ApiTokensJson`, but the manifest declared neither, and the
   host saves settings only through declared keys — `savePluginSettings` rejects
-  any other key with "Setting … not defined in plugin manifest", and undeclared
-  keys are dropped on load — so no install could turn the path on or supply a
-  token. `UseLocalApi` is an ordinary enum toggle like `MintTokens`;
+  any other key with `Setting "<key>" not defined in plugin manifest`, and
+  undeclared keys are dropped on load — so no install could turn the path on or
+  supply a token. `UseLocalApi` is an ordinary enum toggle like `MintTokens`;
   `ApiTokensJson` is a secure string like `TokensJson` and `PasswordsJson`, so
   the Local API token stays in the secret store instead of the ordinary
   preferences. The Local API token is separate from the WSS token.
@@ -156,13 +156,10 @@ endpoints and permissions.
 - **The declared-settings sweep** (#21) replaces an assertion about the ignored
   `hidden` flag: every key the service reads through `jsonSetting()`, a direct
   lookup or `boundSecret()` must be declared in the manifest, and every
-  `boundSecret()` key must be secure. Against `cb7b9ce` this test fails with
-  "ApiTokensJson is read by the service but not declared in the manifest, so no
-  install can save it" — it would have caught the reachability bug above.
-- **`DebugLog` was read but not declared**, so the host refused to save it and
-  dropped it on load — the same defect as the Local API keys. It is now declared
-  as an enum of `"false"`/`"true"` (the shape `jsonSetting` parses) with default
-  `"false"`, and a test pins that shape.
+  `boundSecret()` key must be secure. It fails naming each key the service reads
+  but the manifest omits — exercised against `cb7b9ce`, where `plugin.js` already
+  read both Local API keys and the manifest declared neither — so it catches the
+  class of defect that made the Local API unreachable above.
 - Documentation errors found in review are corrected rather than carried into a
   tag: four citation and measurement errors in the compatibility matrix (the
   invented `hidden`-asserting test, a `surfaces` pin cited at a TLS test line,
