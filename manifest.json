@@ -3,7 +3,7 @@
   "name": "Mahlkönig WebSocket grinders",
   "author": "Decaid contributors",
   "description": "Read-only Mahlkönig grinder telemetry over the local JSON WebSocket API. Only the E64 WS is tested; the E64 TS and NG2 GbS models are untested.",
-  "version": "0.7.6",
+  "version": "0.8.0",
   "apiVersion": 1,
   "permissions": [
     "api",

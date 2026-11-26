@@ -1,0 +1,14 @@
+# Development-only dependencies for the test suite. Nothing here ships: a
+# release is cut from the names in scripts/package-plugin.py's FILES tuple, and
+# this file is not one of them.
+#
+# PyYAML is needed by test/release_assets_test.py. PublishStepRuntimeTests loads
+# the publish step out of .github/workflows/release.yml with yaml.safe_load and
+# runs that script under bash against a stub `gh`, which is the only proof that
+# a release attaches one archive per channel. That class fails rather than skips
+# when the import is missing, so CI installs this file before the suite runs.
+#
+# 6.0.4 is the current release and 6.0.3 is what the development host runs. The
+# floor is 6.0.2; the ceiling keeps a future major from changing safe_load's
+# behaviour underneath the release gate.
+PyYAML>=6.0.2,<7

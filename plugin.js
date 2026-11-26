@@ -291,7 +291,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // keeps that message and its code, adds a fixed classification, and states
   // what was expected and what to do next. Nothing here may echo a token, a
   // password, an auth header or a certificate body.
-  const PLUGIN_VERSION = "0.7.6"; // Keep in step with manifest.json; a test enforces it.
+  const PLUGIN_VERSION = "0.8.0"; // Keep in step with manifest.json; a test enforces it.
   const DIAG_STEPS_MAX = 24, DIAG_TEXT_MAX = 600, DIAG_MESSAGE_MAX = 1200, CERT_PROBE_MS = 4000;
   // What the plugin sends and what a host that implements the option compares.
   // This host build drops unknown fetch options (plugin_manager._performFetch
