@@ -11,4 +11,4 @@
 # 6.0.4 is the current release and 6.0.3 is what the development host runs. The
 # floor is 6.0.2; the ceiling keeps a future major from changing safe_load's
 # behaviour underneath the release gate.
-PyYAML>=6.0.2,<7
+PyYAML>=6.0.4,<7
