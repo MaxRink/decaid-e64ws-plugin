@@ -82,6 +82,11 @@ endpoints and permissions.
   `test/package_channels_test.py` and the `upstream-channel` CI job, which greps
   the pinned upstream ref for `tlsPinSha256`, `responseType` and
   `requestCancellation` and fails once that ref gains any of them.
+- **The publish-step tests execute rather than skip**: PyYAML is an explicit dev
+  dependency (`requirements-dev.txt`, installed by the `node` CI job before the
+  suite), and `PublishStepRuntimeTests` now fails without it instead of quietly
+  skipping, so the two tests that run the release's own publish script against a
+  stub `gh` cannot stop guarding the pair of archives unnoticed.
 - `tools/check-doc-links.mjs` and `tools/capture-doc-shots.mjs`.
 
 ### Changed

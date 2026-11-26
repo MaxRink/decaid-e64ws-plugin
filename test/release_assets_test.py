@@ -17,7 +17,10 @@ import zipfile
 
 try:
     import yaml
-except ImportError:  # the text-level guards below still run without it
+except ImportError:
+    # The text-level guards below still import and run without PyYAML. The
+    # runtime class below does not skip: its setUp fails, naming the install
+    # command, because a missing dev dependency must not weaken the release gate.
     yaml = None
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -209,11 +212,21 @@ class WorkflowShapeTests(unittest.TestCase):
     def test_ci_runs_the_release_asset_tests(self):
         self.assertIn("release_assets_test.py", CI)
 
+    def test_ci_installs_the_runtime_dependency_before_those_tests(self):
+        step = "python3 -m pip install -r requirements-dev.txt"
+        self.assertIn(step, CI, "the runtime tests import PyYAML, so CI must install it")
+        self.assertLess(
+            CI.index(step),
+            CI.index("-p release_assets_test.py"),
+            "PyYAML is installed before the suite whose runtime tests import it",
+        )
+        requirements = (ROOT / "requirements-dev.txt").read_text()
+        self.assertIn("PyYAML", requirements, "the file CI installs names the dependency")
+
     def test_ci_reuses_the_same_module_on_pull_requests(self):
         self.assertIn("release_assets.verify", CI, "upstream-channel runs the publish check on every PR")
 
 
-@unittest.skipIf(yaml is None, "PyYAML is absent; the publish step is still checked textually above")
 class PublishStepRuntimeTests(unittest.TestCase):
     """Runs the workflow's own publish script against a stub `gh`.
 
@@ -223,6 +236,15 @@ class PublishStepRuntimeTests(unittest.TestCase):
     """
 
     def setUp(self):
+        if yaml is None:
+            self.fail(
+                "PyYAML is not importable, so the publish step cannot be parsed out of "
+                ".github/workflows/release.yml and these tests cannot run. Install it "
+                "first: python3 -m pip install -r requirements-dev.txt. This is a "
+                "failure and not a skip on purpose: these are the only tests that "
+                "execute the publish script itself, so skipping them would let a "
+                "release that attaches one archive pass CI."
+            )
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
