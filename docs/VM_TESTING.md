@@ -1,4 +1,4 @@
-# Testing the E64 plugin against the QEMU grinder
+# Testing the plugin against the QEMU grinder
 
 The repository's Node tests use a synthetic WebSocket peer. This guide adds a
 real integration pass against the from-SWU QEMU grinder, using the plugin's

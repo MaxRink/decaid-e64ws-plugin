@@ -1556,7 +1556,7 @@ test('missing or invalid configuration loads in needs-setup and serves the setup
   const plugin = sandbox.createPlugin(host);
   await plugin.onLoad({InstancesJson: one('8.8.8.8'), TokensJson: '{}', PasswordsJson: JSON.stringify({one: {host: '8.8.8.8', password: 'top-secret'}})});
   assert.deepEqual(registrations, []);
-  assert.match(notices[0].message, /^Mahlkönig E64 needs setup: instance host must be .* Set up\.$/);
+  assert.match(notices[0].message, /^Setup needed for Mahlkönig WebSocket grinders: instance host must be .* Set up\.$/);
   const status = JSON.parse(plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {status: '1'}}).body);
   assert.deepEqual([status.needsSetup, status.instances], [true, []]);
   for (const response of [plugin.handleHttpRequest({endpoint: 'setup', method: 'GET', query: {}}), plugin.handleHttpRequest({endpoint: 'ui', method: 'GET', query: {view: 'setup'}})]) {
