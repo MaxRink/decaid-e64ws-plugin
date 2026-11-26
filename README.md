@@ -114,6 +114,10 @@ report the `grinderTypeName` together with the plugin's diagnostics page.
 
 ## Setup
 
+For a step-by-step walkthrough with screenshots — what you need, the exact
+setting names, the token, and what to check afterwards — see
+[`docs/SETUP.md`](docs/SETUP.md).
+
 Open **Decaid > Settings > Plugins > Mahlkönig WebSocket grinders > Set up** (the plugin's
 `setup` page; `ui?view=setup` is an alias for skins). A fresh install, or a
 configuration that no longer validates, loads in a "needs setup" state with a
