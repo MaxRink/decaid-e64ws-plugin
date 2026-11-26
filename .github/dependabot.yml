@@ -24,3 +24,22 @@ updates:
       github-actions:
         patterns:
           - "*"
+  # Test-only Python. requirements-dev.txt pins PyYAML, which
+  # test/release_assets_test.py imports to load the publish step out of
+  # .github/workflows/release.yml and run it against a stub `gh`. Nothing ships -
+  # the file is not in scripts/package-plugin.py's FILES tuple - but CI installs
+  # it before that suite, and the suite fails rather than skips without the
+  # import, so the pin is load-bearing. The file's own ceiling (`<7`) is what
+  # keeps a future major off this branch, so no `ignore` is needed here.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 10
+    groups:
+      python-test-dependencies:
+        patterns:
+          - "*"
