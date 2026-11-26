@@ -13,17 +13,28 @@ code comment.**
 
 This rule exists because of a real incident in this repository. The `hidden`
 flag was declared on a plugin setting and shipped as a way to keep raw JSON out
-of the settings dialog. No Decaid build has ever read it — `hidden` appears in
-no `lib/` file at any pinned ref, and the settings dialog maps *every* declared
-entry into one flat form. The claim had to be withdrawn later, in `faaf493`
-("drop the unsupported hidden flag from the DebugLog declaration"), whose own
-message reads: *"The pinned host refs never read 'hidden' … Shipping it would be
-another dead-metadata claim."*
+of the settings dialog. No Decaid build has ever read it as a manifest key: the
+settings dialog maps *every* declared entry into one flat form, and the schema
+readers are `secure`, `type`, `enum` and `default` only. The claim had to be
+withdrawn later, in `faaf493` ("drop the unsupported hidden flag from the
+DebugLog declaration"), whose own message reads: *"The pinned host refs never
+read 'hidden' … Shipping it would be another dead-metadata claim."*
+
+Measure it rather than assert it. At every pinned ref, `git grep -o "'hidden'"
+<ref> -- lib/` returns **2** occurrences, both in `profile_record.dart` (a
+profile-record field, unrelated to plugins); `git grep -o "hidden" <ref> -- lib/`
+returns **16**, and every one is a framework or enum member — `Visibility.hidden`,
+`AppLifecycleState.hidden`, `TransportConditionDisposition.hidden`. So the honest
+statement is narrow: *no `lib/` code reads `hidden` as a plugin-manifest schema
+key*. "`hidden` appears in no `lib/` file" would be false, and an earlier draft
+of this document said exactly that.
 
 A second instance of the same failure mode is still live and is called out in
 the matrix below: five settings still declare `"hidden": true`, which no host
-honours. Removing it is the manifest owner's call (it is asserted by an
-existing test), so it is documented here rather than quietly changed.
+honours. The flags are **inert on every pinned ref**. They are kept for source
+compatibility with earlier manifests, and because a future host build might read
+them — a different claim from "a test asserts them", which is false: deleting
+all five leaves the suite at 112/112.
 
 ## Pinned refs
 
@@ -113,9 +124,13 @@ reads `json['surfaces']` **inside a driver**, and the allowed roles at `:79` are
 `{'settings', 'diagnostics'}` — `setup` is rejected outright. The manifest
 `toJson` at `:267-268` only re-emits driver surfaces. `git grep "role.*setup" -- lib/`
 returns nothing at any ref. The plugin's top-level `"surfaces": [{... "role":
-"setup"}]` is therefore inert on every host; `test/plugin.test.mjs:1605` still
-asserts it exists (see *Ownership* below). The setup page itself stays reachable
-because it is an `api` endpoint (row 14).
+"setup"}]` is therefore inert on every host, but three tests do pin it:
+`test/plugin.test.mjs:1633` (the declared roles and endpoints),
+`test/identity.test.mjs:105` (the ids and endpoints, inside the frozen-identity
+test) and `test/identity.test.mjs:77-80` (exactly three diagnostics surfaces
+across the plugin and both drivers). Dropping the block fails all three, which
+is why the source keeps it and the **upstream artefact** removes it instead.
+The setup page itself stays reachable because it is an `api` endpoint (row 14).
 
 **7, 8 — `tlsPinSha256`.** Upstream `_performFetch` reads only four keys —
 `lib/src/plugins/plugin_manager.dart:3540-3543` (`url`, `method`, `headers`,
@@ -156,8 +171,9 @@ permission throws `FormatException`, so this is a hard gate, not a hint.
 (`/ws/v1/plugins/<id>/<endpoint>`) and `:144`
 (`/api/v1/plugins/<id>/<endpoint>`). Same at all refs.
 
-**15 — machine control.** Fork-only: `plugins_handler.dart:73` adds
-`/api/v1/plugins/<id>/machine-control`, and the settings view adds
+**15 — machine control.** Fork-only: `plugins_handler.dart:77` adds
+`PUT /api/v1/plugins/<id>/machine-control` (`:73` on that file is the settings
+POST, not this route), and the settings view adds
 `_buildMachineControlSwitch` (`plugins_settings_view.dart:426`). This plugin
 declares the `api` permission, so the fork shows that switch, but the plugin
 never calls the route.
@@ -186,6 +202,16 @@ feature branch. Always pass the ref.
 | Setup surface | Not claimed; the page is documented as URL-only | Not claimed |
 | `hidden`/`advanced`/`valueLabels` | Not promised to the user | Not promised to the user |
 
+"Never sent" is a statement about **run time**, not about the file's text. The
+packaged upstream `plugin.js` still contains **14** textual occurrences of
+`tlsPinSha256`. Four are code — `pinOption()`, the connect probe, the
+`probeCertificate()` probe, and the `capabilities()` reporting key — and all four
+are either gated on the channel or unreachable on it; the other ten are the
+notice text and comments. `responseType` is the same shape: 4 occurrences, one
+of them the gated ZIP request. So the accurate claim is *none reachable at run
+time*, not *none present*, and a reviewer grepping the archive should check the
+gates rather than the string count.
+
 The pin verdict is established in one place and shared. `probeCertificate()` in
 `plugin.js` (the setup assistant's probe, which already sent an unmatchable
 fingerprint before this change) records the host's verdict, and the capability
@@ -205,13 +231,37 @@ curl -s 'http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/e64-diagn
 #   "setupSurface": "unrendered", "messages": { ... } }
 ```
 
+## What the guard does not cover
+
+The `upstream-channel` CI job greps the pinned ref for three option names —
+`tlsPinSha256`, `responseType`, `requestCancellation` — and fails if any appears.
+That holds rows 7, 8, 9 and 11 honest, which is four of the fifteen:
+
+- It says nothing about row 10: the pinned ref could lose `fetchTimeout` and the
+  job would stay green.
+- It says nothing about the setup-surface row (6): a host that started parsing a
+  top-level `surfaces` block would go unnoticed.
+- It does not guard **this document**. Rewriting rows 7, 9 and 11 to claim
+  `both` leaves the whole job green, because nothing reads the matrix text — the
+  job tests the code's behaviour, not the table's accuracy.
+- So the matrix can drift from the code without any check firing. Two cheap
+  guards would close most of it: assert the driver-only `json['surfaces']`
+  property of the pinned ref in the job (the same `git grep` row 6 is built on),
+  and compare the table's `fork`/`both` verdicts for the asserted rows against
+  the job's own expectations.
+
+Until those exist, treat a green run as evidence about the three absences it
+does check, and re-read the rows above by hand when a host ref moves.
+
 ## Ownership
 
 Two rows cannot be corrected here without touching work another PR owns:
 
-- `manifest.json` still declares `"hidden": true` on five settings (rows 2, 3),
-  and `test/plugin.test.mjs:1604` asserts it. Removing it belongs with the
-  manifest PRs (#18/#19), not this one.
+- `manifest.json` still declares `"hidden": true` on five settings (rows 2, 3).
+  No test depends on them — deleting all five keeps `npm test` at 112/112 — so
+  removing them is one deleted line each, but it belongs with the manifest
+  owners, not here. Their real justification is in *The rule* above.
 - The inert top-level `surfaces` block (row 6) is kept in the source tree
-  because `test/plugin.test.mjs:1605` asserts it. The **upstream-channel
-  artefact** drops it at packaging time instead of editing the shared manifest.
+  because `test/plugin.test.mjs:1633`, `test/identity.test.mjs:105` and
+  `test/identity.test.mjs:77-80` pin it. The **upstream-channel artefact** drops
+  it at packaging time instead of editing the shared manifest.
