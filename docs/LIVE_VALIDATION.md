@@ -120,6 +120,6 @@ be narrowed.
 
 The full read-only report, including the REST and WSS evidence, is in the
 research repository:
-`mahlkoenig-e64ws-local-research/docs/LIVE_VALIDATION_2026-11-18.md`. No
+`mahlkoenig-grinder-research/docs/LIVE_VALIDATION_2026-11-18.md`. No
 credential, token, session cookie, serial number or MAC address is included
 there.

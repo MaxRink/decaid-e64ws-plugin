@@ -16,5 +16,5 @@ contact_links:
   url: https://github.com/MaxRink/decaid-assisted-dialin-plugin/issues/new/choose
   about: Route grinder catalog, website, and assisted dial-in proposals.
 - name: Private security report
-  url: https://github.com/MaxRink/decaid-e64ws-plugin/security/advisories/new
+  url: https://github.com/MaxRink/decaid-mahlkoenig-websocket-grinder-plugin/security/advisories/new
   about: Keep vulnerability details out of public bug reports.

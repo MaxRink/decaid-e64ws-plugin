@@ -242,7 +242,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.HAS_RESEARCH_KEY == 'true'
         with:
-          repository: MaxRink/mahlkoenig-e64ws-local-research
+          repository: MaxRink/mahlkoenig-grinder-research
           ssh-key: ${{ secrets.RESEARCH_REPO_SSH_KEY }}
           path: research
           persist-credentials: false
