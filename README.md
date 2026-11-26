@@ -676,3 +676,69 @@ deterministic archive under `dist/`; documentation, mocks and CI fixtures remain
 in the repository. CI proves synthetic software behavior, not physical hardware
 or firmware compatibility. The 2026-11-18 live pass is a read-only runtime
 check; see [`docs/LIVE_VALIDATION.md`](docs/LIVE_VALIDATION.md).
+
+## Compatibility with Decaid builds
+
+This plugin runs on **upstream Decaid**. Anything that only works on the
+[`MaxRink/decaid`](https://github.com/MaxRink/decaid) fork is detected at
+runtime and gated into a separate release artefact, never switched on silently.
+
+Two facilities are fork-only, and both degrade with one sentence that names the
+build which supports them instead of failing quietly:
+
+| Feature | Upstream Decaid | `MaxRink/decaid` fork |
+| --- | --- | --- |
+| `certSha256` certificate pinning | Not sent. The plugin says pinning needs the fork build | Sent, and the host verifies the certificate |
+| Machine-log ZIP download (`responseType: base64`) | Not requested. Logs come from the Local API only | Requested, and the ZIP is parsed |
+
+Every other facility the plugin uses — the settings dialog, `secure` settings,
+the five declared permissions, the `api` endpoints, and the host's 30-second
+`fetch` timeout — is present in both. The settings dialog renders every declared
+setting on every build; `hidden`, `advanced` and `valueLabels` are declared in
+`manifest.json` but honoured by no build, so do not rely on them hiding
+anything. A plugin *setup surface* is rendered by no build either: open the setup
+page directly at
+`/api/v1/plugins/mahlkoenig-e64.reaplugin/setup`, or edit the settings in
+Decaid's plugin settings dialog.
+
+The full matrix, with a `file:line` citation at a pinned ref for every row and
+the rule for verifying host claims, is in
+[`docs/UPSTREAM_COMPATIBILITY.md`](docs/UPSTREAM_COMPATIBILITY.md). The runtime
+answer for your own host is one request away:
+
+```bash
+curl -s 'http://127.0.0.1:8080/api/v1/plugins/mahlkoenig-e64.reaplugin/e64-diagnostics?read=connection' \
+  | jq .capabilities
+```
+
+## Cutting a release, per channel
+
+Both artefacts come from this one tree. The channel is a build-time constant
+(`PLUGIN_CHANNEL` in `plugin.js`) that `scripts/package-plugin.py` rewrites, so a
+fork-only build is a different file rather than a hidden behaviour change.
+
+```bash
+npm ci
+npm run package                          # upstream channel (the default)
+npm run package -- --channel fork        # fork channel
+ls dist/*.zip
+# dist/decaid-e64ws-plugin-<version>.zip        <- ship to decentespresso/decaid users
+# dist/decaid-e64ws-plugin-<version>-fork.zip   <- the additional, fork-only release
+```
+
+Rules for the owner:
+
+- **Default is upstream.** A release cut with no flag carries no fork-only
+  facility: it never sends `tlsPinSha256` or `responseType`, its manifest drops
+  the setup-surface block no host parses, and its `certSha256` wording points at
+  the fork build.
+- **Fork is a separate artefact.** Only publish the `-fork` ZIP to users who run
+  `MaxRink/decaid`. The two archives have different names and different
+  contents, so a mistyped upload is visible rather than silent.
+- **Bump the version once** in `manifest.json`, `package.json` and
+  `package-lock.json`; both channels share it, so tag the release with it and
+  attach the artefact you intend to ship.
+- **Both channels stay on disk.** Cutting one does not delete the other.
+
+The channel is also visible to support in the diagnostics output above
+(`capabilities.channel`), so a report can be classified without guessing.

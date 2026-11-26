@@ -6,7 +6,9 @@ import zlib from 'node:zlib';
 import crypto from 'node:crypto';
 import {decaidApi, hostFetch} from './support/sim-host.mjs';
 
-const source = fs.readFileSync(new URL('../plugin.js', import.meta.url), 'utf8');
+// E64_PLUGIN_SOURCE lets CI run the whole suite against a packaged artefact,
+// so the ZIP/responseType and pin paths are proven on the shipped file.
+const source = fs.readFileSync(process.env.E64_PLUGIN_SOURCE || new URL('../plugin.js', import.meta.url), 'utf8');
 function load(settings, fixture, timers = {}, fetchImpl = null) {
   const registrations = [];
   const host = {devices: {register(definition, handlers) { registrations.push({definition, handlers}); return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:e64:${definition.instanceId}`}); }}};

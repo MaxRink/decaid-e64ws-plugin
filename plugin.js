@@ -1,5 +1,71 @@
 function createPlugin(host) {
   "use strict";
+  // --- Release channel and host capabilities --------------------------------
+  // PLUGIN_CHANNEL is a build-time constant, never a runtime switch:
+  // scripts/package-plugin.py rewrites this one line when it cuts a release.
+  // The source tree is the fork channel because that is where every feature is
+  // exercised; the upstream-channel artefact is a separate file, so a fork-only
+  // facility can never become a hidden behaviour change.
+  const PLUGIN_CHANNEL = "fork"; /* package-plugin:channel */
+  const FORK_BUILD = PLUGIN_CHANNEL === "fork";
+  const FORK_BUILD_NAME = "the MaxRink/decaid fork build";
+  // One sentence per gated facility, naming the build that does support it.
+  const GATED = {
+    tlsPin: "Certificate pinning (certSha256) needs a Decaid build that enforces tlsPinSha256, which only "
+      + FORK_BUILD_NAME + " provides; this build does not enforce certSha256 (it ignores tlsPinSha256), "
+      + "so it connects without pinning.",
+    base64: "The machine-log ZIP needs a Decaid build with responseType base64, which only "
+      + FORK_BUILD_NAME + " provides, so this build reads logs only through the Local API.",
+    setup: "No Decaid build renders a plugin setup surface; open /api/v1/plugins/mahlkoenig-e64.reaplugin/setup "
+      + "directly, or use the plugin settings dialog."
+  };
+  // Host facilities are verified, not assumed. A fork-only option is never
+  // trusted just because the host accepted it without an error: the upstream
+  // host drops every unknown fetch key, so silence is not support.
+  let pinState = "unchecked", base64State = "unchecked";
+  function pinRefused() { return !FORK_BUILD || pinState === "unsupported"; }
+  function pinOption(pin) { return pin && !pinRefused() ? {tlsPinSha256: pin} : {}; }
+  function gateNotice(facility) {
+    try { host.notify({id: "cap-" + facility, message: GATED[facility]}); } catch (_) {}
+  }
+  // The capability probe, generalising the unmatchable-pin idiom: a host with
+  // tlsPinSha256 support refuses an impossible pin BEFORE it opens a socket
+  // (parseTlsPinSha256 runs before the HTTP client is built), while a host that
+  // ignores the option dials anyway. The error text is the difference, so a
+  // network failure does not read as support.
+  async function probePinSupport(url) {
+    if (!FORK_BUILD || pinState !== "unchecked") return pinState;
+    let refused = false;
+    try {
+      await fetch(url, {method: "GET", tlsPinSha256: "e64-pin-probe"});
+    } catch (error) {
+      refused = /tlsPinSha256/.test(String(error && error.message));
+    }
+    pinState = refused ? "supported" : "unsupported";
+    if (!refused) gateNotice("tlsPin");
+    return pinState;
+  }
+  // A pin that the host silently dropped fails as a TLS error, because the E64
+  // serves a self-signed certificate. Classify it once instead of blaming the
+  // grinder for a host that cannot keep the promise.
+  function notePinFailure(instance, error) {
+    if (!FORK_BUILD || pinState !== "unchecked") return;
+    if (!/certificate|handshake|tls|ssl|self signed/i.test(String(error && error.message || ""))) return;
+    probePinSupport(restUrl(instance.config, "ping")).catch(() => {});
+  }
+  function capabilities() {
+    return {
+      channel: PLUGIN_CHANNEL,
+      tlsPinSha256: FORK_BUILD ? pinState : "channel-off",
+      responseTypeBase64: base64State,
+      // No Decaid build implements requestCancellation and this plugin never
+      // asks for it, so the row is reported rather than relied on.
+      requestCancellation: "unused",
+      setupSurface: "unrendered",
+      // The one sentence per gated facility, so docs and diagnostics cannot drift.
+      messages: GATED
+    };
+  }
   /* plugin-ui:begin */
 const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065dda587f38d2c8130c5d37dce9950134ec","js":"749c8fd79583c4fdebc357cfcf1532a13bb61f7b495ed40dd323550f8e32b676"},"css":":root{--pu-bg:#fff;--pu-surface:#f6f8fa;--pu-text:#121212;--pu-muted:#5f6368;--pu-border:#c9c9c9;--pu-accent:#385a92;--pu-link:#385a92;--pu-on-accent:#fff;--pu-scheme:light;--pu-ok:#0a8a6c;--pu-warn:#b26a00;--pu-danger:#c62828;--pu-radius:12px;--pu-tap:56px;--pu-row:48px}\n:root[data-theme=dark]{--pu-bg:#101217;--pu-surface:#17191e;--pu-text:#e8e8e8;--pu-muted:#959595;--pu-border:#3d4255;--pu-accent:#415996;--pu-link:#9db4ee;--pu-scheme:dark;--pu-ok:#0ca581;--pu-warn:#e0a030;--pu-danger:#ef5350}\n@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--pu-bg:#101217;--pu-surface:#17191e;--pu-text:#e8e8e8;--pu-muted:#959595;--pu-border:#3d4255;--pu-accent:#415996;--pu-link:#9db4ee;--pu-scheme:dark;--pu-ok:#0ca581;--pu-warn:#e0a030;--pu-danger:#ef5350}}\n*,*::before,*::after{box-sizing:border-box}\nbody.pu{margin:0;background:var(--pu-bg);color:var(--pu-text);font:18px/1.4 system-ui,\"Inter\",-apple-system,\"Segoe UI\",Roboto,sans-serif;-webkit-text-size-adjust:100%}\n[data-embed] body.pu{background:transparent}\n.pu [hidden]{display:none!important}\n.pu-page{max-width:46rem;margin:0 auto;padding:16px;background:var(--pu-bg);border-radius:var(--pu-radius)}\n.pu h1{font-size:24px;margin:0}.pu h2{font-size:20px;margin:0 0 8px}.pu p{margin:0 0 12px}\n.pu a{color:var(--pu-link)}\n.pu-muted,.pu-hint{color:var(--pu-muted);font-size:16px}\n.pu-header{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:var(--pu-tap);margin-bottom:12px}\n[data-embed] [data-pu-done]{display:none}\n.pu-card{background:var(--pu-surface);border:1px solid var(--pu-border);border-radius:var(--pu-radius);padding:16px;margin:0 0 16px}\n.pu-row{display:grid;gap:4px 16px;align-items:center;min-height:var(--pu-row);padding:8px 0;border-top:1px solid var(--pu-border)}\n.pu-row:first-child{border-top:0}\n@media (min-width:600px){.pu-row{grid-template-columns:minmax(10rem,1fr) minmax(0,1.4fr)}.pu-row>.pu-hint{grid-column:1/-1}}\n.pu label{font-weight:600}\n.pu input:not([type=checkbox]):not([type=radio]),.pu select,.pu textarea{width:100%;min-height:var(--pu-row);padding:10px 12px;font:inherit;color:var(--pu-text);background:var(--pu-bg);border:1px solid var(--pu-border);border-radius:8px;color-scheme:var(--pu-scheme)}\n.pu textarea{min-height:8rem;font-family:ui-monospace,monospace;font-size:15px}\n.pu :focus-visible{outline:3px solid var(--pu-accent);outline-offset:2px}\n.pu-btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:var(--pu-tap);padding:0 28px;font:inherit;font-weight:700;border-radius:999px;border:2px solid var(--pu-accent);background:var(--pu-accent);color:var(--pu-on-accent);cursor:pointer;text-decoration:none}\n.pu-btn.pu-secondary{background:transparent;color:var(--pu-link)}\n.pu-btn.pu-danger{background:var(--pu-danger);border-color:var(--pu-danger)}\n.pu-btn:disabled{opacity:.45;cursor:not-allowed}\n.pu-actions{display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end;padding:12px 0}\n.pu-actions.pu-sticky{position:sticky;bottom:0;background:var(--pu-bg);border-top:1px solid var(--pu-border)}\n.pu-switch{appearance:none;flex:none;width:72px;height:40px;margin:8px 0;border-radius:999px;background:var(--pu-border);position:relative;cursor:pointer;transition:background .15s}\n.pu-switch::after{content:\"\";position:absolute;top:4px;left:4px;width:32px;height:32px;border-radius:50%;background:#fff;transition:transform .15s}\n.pu-switch:checked{background:var(--pu-accent)}.pu-switch:checked::after{transform:translateX(32px)}\n.pu-choice{display:grid;gap:12px;margin:0;padding:0;border:0}\n.pu-choice label{display:flex;gap:12px;align-items:flex-start;min-height:var(--pu-tap);padding:14px 16px;border:2px solid var(--pu-border);border-radius:var(--pu-radius);cursor:pointer;font-weight:400}\n.pu-choice label:has(input:checked){border-color:var(--pu-accent)}\n.pu-choice label:has(input:disabled){opacity:.5;cursor:not-allowed}\n.pu-choice input{width:24px;height:24px;margin:2px 0 0;accent-color:var(--pu-accent);color-scheme:var(--pu-scheme);flex:none}\n.pu-choice b{display:block}\n.pu-stepper{display:flex;align-items:center;gap:8px;margin:0 0 16px;color:var(--pu-muted);font-size:16px}\n.pu-stepper i{width:10px;height:10px;border-radius:50%;background:var(--pu-border)}\n.pu-stepper i.on{background:var(--pu-accent)}\n.pu-pill{display:inline-flex;align-items:center;min-height:32px;padding:2px 12px;border-radius:999px;font-size:15px;font-weight:600;border:1px solid currentColor;color:var(--pu-muted)}\n.pu-pill.pu-ok{color:var(--pu-ok)}.pu-pill.pu-warn{color:var(--pu-warn)}.pu-pill.pu-error{color:var(--pu-danger)}\n.pu-alert{padding:12px 16px;margin:0 0 16px;border-radius:var(--pu-radius);border-left:6px solid var(--pu-accent);background:var(--pu-surface)}\n.pu-alert.pu-ok{border-color:var(--pu-ok)}.pu-alert.pu-warn{border-color:var(--pu-warn)}.pu-alert.pu-error{border-color:var(--pu-danger)}\n.pu-code{display:block;padding:12px;font:15px/1.6 ui-monospace,monospace;background:var(--pu-bg);border:1px solid var(--pu-border);border-radius:8px;overflow-wrap:anywhere}\n.pu-secure{display:flex;gap:8px}.pu-secure input{flex:1}.pu-secure .pu-btn{padding:0 16px}\ndetails.pu-details{margin:0 0 16px}details.pu-details>summary{min-height:var(--pu-row);display:flex;align-items:center;cursor:pointer;font-weight:600;color:var(--pu-link)}\n@media (prefers-reduced-motion:reduce){.pu *{transition:none!important}}\n","js":"(function () {\n  \"use strict\";\n  var q = new URLSearchParams(location.search), root = document.documentElement;\n  var lang = (q.get(\"lang\") || \"en\").toLowerCase().split(\"-\")[0];\n  var strings = {de: {Back: \"Zurück\", Next: \"Weiter\", Done: \"Fertig\", Show: \"Anzeigen\", Hide: \"Verbergen\", \"Step {n} of {m}\": \"Schritt {n} von {m}\"}};\n  var embedded = q.get(\"embed\") === \"1\", fit = false;\n  var parentPost = function (msg) { if (window.parent !== window) window.parent.postMessage(msg, \"*\"); };\n  var pu = {\n    lang: lang, embedded: embedded, params: q,\n    t: function (key, vars) {\n      var s = (strings[lang] && strings[lang][key]) || key;\n      return s.replace(/\\{(\\w+)\\}/g, function (_, k) { return vars && k in vars ? vars[k] : \"{\" + k + \"}\"; });\n    },\n    init: function (opts) {\n      opts = opts || {};\n      Object.keys(opts.strings || {}).forEach(function (l) { strings[l] = Object.assign(strings[l] || {}, opts.strings[l]); });\n      document.querySelectorAll(\"[data-pu-t]\").forEach(function (el) { el.textContent = pu.t(el.getAttribute(\"data-pu-t\")); });\n      fit = Boolean(opts.fit) && embedded;\n      parentPost({type: \"streamline:ready\"});\n      if (fit) { pu.size(); if (window.ResizeObserver) new ResizeObserver(pu.size).observe(document.querySelector(\".pu-page\") || document.body); }\n    },\n    size: function () {\n      if (!fit) return;\n      var r = (document.querySelector(\".pu-page\") || document.body).getBoundingClientRect();\n      parentPost({type: \"streamline:size\", width: Math.ceil(r.width), height: Math.ceil(r.height)});\n    },\n    done: async function () {\n      if (window.parent !== window) return parentPost({type: \"streamline:close\"});\n      var bridge = window.flutter_inappwebview;\n      if (bridge && bridge.callHandler) return bridge.callHandler(\"pluginSurface\", {type: \"close\"});\n      var target = q.get(\"returnTo\"), skin = null, path = q.get(\"return\");\n      try {\n        if (!target && path && /^\\/(?![\\/\\\\])/.test(path)) {\n          var s = await (await fetch(\"/api/v1/webui/server/status\")).json();\n          if (s.serving && Number.isInteger(s.port)) { skin = new URL(location.href); skin.port = String(s.port); target = new URL(path, skin.origin).href; }\n        }\n        if (target) {\n          var u = new URL(target);\n          if (/^https?:$/.test(u.protocol) && u.hostname === location.hostname && !u.username && !u.password && (!skin || u.origin === skin.origin)) return location.assign(u.href);\n        }\n      } catch (e) { target = null; }\n      history.back();\n    },\n    api: async function (path, opts) {\n      opts = opts || {};\n      var res = await fetch(path, {method: opts.method || (opts.body === undefined ? \"GET\" : \"POST\"),\n        headers: opts.body === undefined ? {} : {\"Content-Type\": \"application/json\"},\n        body: opts.body === undefined ? undefined : JSON.stringify(opts.body)});\n      var data = null; try { data = await res.json(); } catch (e) { data = null; }\n      if (!res.ok) { var err = new Error((data && data.error) || \"HTTP \" + res.status); err.status = res.status; err.data = data; throw err; }\n      return data;\n    },\n    secureValue: function (input, wasSet) {\n      if (input.value) return input.value;\n      return wasSet ? {isSet: true} : undefined;\n    },\n    fingerprint: function (hex) {\n      return String(hex).replace(/[^0-9a-f]/gi, \"\").toUpperCase().replace(/(..)(?!$)/g, \"$1:\");\n    },\n    wizard: function (container, onNext) {\n      var steps = Array.prototype.slice.call(container.querySelectorAll(\"[data-pu-step]\")), i = 0;\n      var back = container.querySelector(\"[data-pu-back]\"), next = container.querySelector(\"[data-pu-next]\"), bar = container.querySelector(\"[data-pu-stepper]\");\n      function show(n) {\n        i = n;\n        steps.forEach(function (s, k) { s.hidden = k !== i; });\n        if (back) back.disabled = i === 0;\n        if (next) next.hidden = i === steps.length - 1;\n        if (bar) bar.innerHTML = steps.map(function (_, k) { return \"<i class=\\\"\" + (k <= i ? \"on\" : \"\") + \"\\\"></i>\"; }).join(\"\") + \"<span></span>\";\n        if (bar) bar.lastChild.textContent = pu.t(\"Step {n} of {m}\", {n: i + 1, m: steps.length});\n        var h = steps[i].querySelector(\"h2\"); if (h) { h.tabIndex = -1; h.focus(); }\n        pu.size();\n      }\n      if (back) back.addEventListener(\"click\", function () { if (i > 0) show(i - 1); });\n      if (next) next.addEventListener(\"click\", async function () {\n        next.disabled = true;\n        try { if (!onNext || (await onNext(i, steps[i])) !== false) show(Math.min(i + 1, steps.length - 1)); } finally { next.disabled = false; }\n      });\n      show(0);\n      return {show: show, get index() { return i; }};\n    }\n  };\n  var theme = q.get(\"theme\");\n  if (theme === \"light\" || theme === \"dark\") root.setAttribute(\"data-theme\", theme);\n  if (embedded) root.setAttribute(\"data-embed\", \"\");\n  root.lang = lang;\n  document.addEventListener(\"click\", function (e) {\n    var b = e.target.closest && e.target.closest(\"[data-pu-reveal]\");\n    if (b) {\n      var input = b.parentNode.querySelector(\"input\");\n      var hidden = input.type === \"password\";\n      input.type = hidden ? \"text\" : \"password\";\n      b.textContent = pu.t(hidden ? \"Hide\" : \"Show\");\n      b.setAttribute(\"aria-pressed\", String(hidden));\n    }\n    if (e.target.closest && e.target.closest(\"[data-pu-done]\")) pu.done();\n  });\n  window.pu = pu;\n})();\n"};
 /* plugin-ui:end */
@@ -879,7 +945,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({userRole: role, password}),
-        ...(config.certSha256 ? {tlsPinSha256: config.certSha256} : {})
+        ...pinOption(config.certSha256)
       });
     } catch (error) {
       // The host's transport error is classified, never discarded: it names the
@@ -1099,7 +1165,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
           localError = error;
         }
       }
-      if (!await downloadLogsZip(instance, config)) { log.status = "unsupported-host"; return; }
+      if (!await downloadLogsZip(instance, config)) { log.status = "unsupported-host"; log.lastError = GATED.base64; return; }
       markLogOk(log);
     } catch (error) {
       const cause = localError || error;
@@ -1160,16 +1226,21 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   async function downloadLogsZip(instance, config) {
     // Reuse the connection's Owner session; log in again only when it was refused.
     const fetchZip = () => fetchLogRequest(restUrl(config, "download_machine_logs"), {
-      method: "POST", body: "{}", responseType: "base64",
+      method: "POST", body: "{}", ...(FORK_BUILD ? {responseType: "base64"} : {}),
       headers: {"Content-Type": "application/json", Authorization: "Bearer " + instance.restToken, ...(instance.restCookie ? {Cookie: "PHPSESSID=" + instance.restCookie} : {})},
-      ...(config.certSha256 ? {tlsPinSha256: config.certSha256} : {})
+      ...pinOption(config.certSha256)
     }, "grind log");
     let response = instance.restToken ? await fetchZip() : null;
     if (!response || (!response.ok && response.status >= 400 && response.status < 500)) {
       await mintToken(instance);
       response = await fetchZip();
     }
-    if (!response || typeof response.base64 !== "function") return false;
+    if (!response) return false;
+    // responseType is a fork-only fetch option, so support is read off the
+    // response itself rather than assumed: an upstream host returns a text body
+    // with no base64() accessor.
+    if (typeof response.base64 !== "function") { base64State = "unsupported"; return false; }
+    base64State = "supported";
     if (!response.ok) throw new Error("grind log HTTP " + response.status);
     const bytes = fromBase64(await response.base64());
     const grindCsv = readZip(bytes, (name) => /GrindLogs[^/]*\.csv$/i.test(name), MAX_LOG_BYTES);
@@ -1193,7 +1264,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const config = instance.config;
     const headers = {"Content-Type": "application/json", "X-E64-Local-Token": config.localApiToken};
     if (instance.restCookie) headers.Cookie = "PHPSESSID=" + instance.restCookie;
-    const pin = config.certSha256 ? {tlsPinSha256: config.certSha256} : {};
+    const pin = pinOption(config.certSha256);
     const fetchJson = (route, body = {}) => fetchLogRequest(localApiUrl(config, route), {
       method: "POST", body: JSON.stringify(body),
       headers, ...pin
@@ -1370,7 +1441,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const control = instance.control, config = instance.config;
     let handle = null;
     try {
-      const pin = config.scheme === "wss" && config.certSha256 ? {tlsPinSha256: config.certSha256} : {};
+      const pin = pinOption(config.scheme === "wss" ? config.certSha256 : null);
       handle = (await host.transport.open({kind: "websocket", url: url(config, token), ...pin})).handle;
       control.debugMode = await new Promise((resolve) => {
         const timer = setTimeout(() => resolve("unknown"), PROBE_MS);
@@ -1660,7 +1731,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
         if (epoch !== instance.epoch) return;
         instance.config.token = token;
       }
-      const pin = instance.config.scheme === "wss" && instance.config.certSha256 ? {tlsPinSha256: instance.config.certSha256} : {};
+      const pin = pinOption(instance.config.scheme === "wss" ? instance.config.certSha256 : null);
       const opening = Date.now();
       let opened;
       try { opened = await transport.open({kind: "websocket", url: url(instance.config), ...pin}); }
@@ -1687,6 +1758,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       queueLogDownload(instance, Number.isFinite(lastLog) ? Math.max(LOG_CONNECT_DELAY_MS, lastLog + LOG_IDLE_REFRESH_MS - Date.now()) : LOG_CONNECT_DELAY_MS);
     } catch (error) {
       await disconnect(instance, epoch, "E64 connection failed");
+      // The open carried a pin, so a TLS failure may be the host ignoring it.
+      if (instance.config.scheme === "wss" && instance.config.certSha256 && !pinRefused()) notePinFailure(instance, error);
       // Host WebSocket errors can echo the connect URL, which carries the token.
       const diagnosis = connectDiagnosis(instance, error);
       instance.diag.lastFailure = {class: diagnosis.failure.stage, message: redactForReport(error && error.message, instanceSecrets(instance)),
@@ -1768,10 +1841,19 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // It only claims a fingerprint when the host provably enforced the pin.
   async function probeCertificate(target, candidate, instance) {
     const note = (pinSupport, observed) => {
+      // The verdict is a property of the host build, not of this target, so it
+      // also governs whether later connects attach a pin at all.
+      if (pinSupport === "ignored") pinState = "unsupported";
+      else if (pinSupport === "honoured" && pinState === "unchecked") pinState = "supported";
       if (!instance) return;
       if (pinSupport) instance.diag.hostPinSupport = pinSupport;
       if (observed) instance.diag.observedFingerprint = observed;
     };
+    if (pinRefused()) {
+      // Asking a host that cannot pin is worse than useless: it accepts any
+      // certificate, so a "recognised" answer would be a promise we cannot keep.
+      return {recognised: false, pinning: false, reason: "pin-unsupported", message: GATED.tlsPin};
+    }
     const attempt = async (pin) => {
       try {
         await fetchWithTimeout(restUrl(target, "ping"), {method: "GET", tlsPinSha256: pin}, CERT_PROBE_MS);
@@ -1785,8 +1867,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       const unmatchable = await attempt(UNMATCHABLE_SHA256);
       if (unmatchable.ok) {
         note("ignored");
-        return {recognised: false, reason: "pin-unsupported",
-          message: "This Decaid build does not enforce certSha256 (it ignores tlsPinSha256), so the certificate cannot be identified here. Paste the SHA-256 fingerprint from the command below; it is stored and compared exactly."};
+        return {recognised: false, reason: "pin-unsupported", message: GATED.tlsPin};
       }
       note("honoured", FLEET_SHA256);
       return {recognised: true, certSha256: FLEET_SHA256, observedFingerprint: FLEET_SHA256};
@@ -1831,10 +1912,13 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
         password = saved ? saved.config.password : "";
       }
       if (!password || password.length > 1024) return {status: 400, payload: {result: "no-password", fields: {password: "Enter the Owner password."}, message: "Enter the Owner password."}};
+      // The grinder serves a self-signed certificate, so this HTTPS login can only
+      // be verified with a pin. Say that instead of reporting "unreachable".
+      if (pinRefused()) return {status: 200, payload: {result: "no-pinning", message: GATED.tlsPin}};
       const secrets = [password];
       let response;
       try {
-        response = await fetch(restUrl(target, "login"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({userRole: "Owner", password}), tlsPinSha256: pin});
+        response = await fetch(restUrl(target, "login"), {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({userRole: "Owner", password}), ...pinOption(pin)});
       } catch (error) {
         // "Not reachable" hid a DNS, TCP, TLS, certificate or pin failure: the
         // stage is reported instead, with the expected value and one next step.
@@ -2126,6 +2210,9 @@ load();
       const {errors, configs} = validate(settings);
       needsSetup = errors.length ? errors[0] : null;
       setupNotice(needsSetup);
+      // An upstream-channel build never sends tlsPinSha256 at all, so a configured
+      // pin would otherwise be dropped in silence.
+      if (configs.some((config) => config.certSha256) && pinRefused()) gateNotice("tlsPin");
       return Promise.all(configs.map(async (config) => {
         const instance = make(config); instances.set(config.id, instance);
         // Control is only registered when the probe proves the grinder accepts it, so a locked grinder stays read-only.
@@ -2246,7 +2333,8 @@ load();
           diagnosis: failure ? {stage: failure.stage, status: failure.status, code: failure.code, expected: failure.expected,
             observed: redactForReport(failure.observed, instanceSecrets(instance)), next: failure.next} : null,
           mintBackoffUntil: instance.nextMintAt === null ? null : new Date(instance.nextMintAt).toISOString(),
-          staticToken: Boolean(instance.config.staticToken), mintTokens: Boolean(instance.config.mintTokens)};
+          staticToken: Boolean(instance.config.staticToken), mintTokens: Boolean(instance.config.mintTokens),
+          pinned: Boolean(instance.config.certSha256) && !pinRefused(), capabilities: capabilities()};
         return Promise.resolve({status: 200, headers: {"Content-Type": "application/json"}, body: JSON.stringify(connection)});
       }
       const headers = (live) => ({"Content-Type": "application/json", "X-E64-Observation-State": live ? "live" : (instance.lastObservationAt ? "last-known" : "none"), ...(instance.lastObservationAt ? {"X-E64-Observation-Time": instance.lastObservationAt} : {})});
