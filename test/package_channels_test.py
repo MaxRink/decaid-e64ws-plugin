@@ -32,9 +32,9 @@ class ChannelTests(unittest.TestCase):
         for name, content in self.real.items():
             (self.root / name).write_bytes(content)
         for name in ("package.json",):
-            (self.root / name).write_text(json.dumps({"version": "0.8.0"}))
+            (self.root / name).write_text(json.dumps({"version": "0.8.1"}))
         (self.root / "package-lock.json").write_text(
-            json.dumps({"version": "0.8.0", "packages": {"": {"version": "0.8.0"}}})
+            json.dumps({"version": "0.8.1", "packages": {"": {"version": "0.8.1"}}})
         )
 
     def cut(self, channel):
@@ -75,8 +75,8 @@ class ChannelTests(unittest.TestCase):
     def test_each_channel_is_a_different_artefact_on_disk(self):
         upstream = self.cut("upstream")
         fork = self.cut("fork")
-        self.assertEqual(upstream.name, "decaid-e64ws-plugin-0.8.0.zip")
-        self.assertEqual(fork.name, "decaid-e64ws-plugin-0.8.0-fork.zip")
+        self.assertEqual(upstream.name, "decaid-e64ws-plugin-0.8.1.zip")
+        self.assertEqual(fork.name, "decaid-e64ws-plugin-0.8.1-fork.zip")
         self.assertTrue(upstream.exists() and fork.exists(), "cutting one channel keeps the other")
         self.assertNotEqual(upstream.read_bytes(), fork.read_bytes())
         self.assertIn(MARKER.format("upstream"), self.contents(upstream)["plugin.js"].decode())
