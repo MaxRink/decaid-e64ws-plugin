@@ -291,7 +291,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // keeps that message and its code, adds a fixed classification, and states
   // what was expected and what to do next. Nothing here may echo a token, a
   // password, an auth header or a certificate body.
-  const PLUGIN_VERSION = "0.8.0"; // Keep in step with manifest.json; a test enforces it.
+  const PLUGIN_VERSION = "0.8.1"; // Keep in step with manifest.json; a test enforces it.
   const DIAG_STEPS_MAX = 24, DIAG_TEXT_MAX = 600, DIAG_MESSAGE_MAX = 1200, CERT_PROBE_MS = 4000;
   // What the plugin sends and what a host that implements the option compares.
   // This host build drops unknown fetch options (plugin_manager._performFetch
@@ -457,7 +457,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   // The bundle a user attaches to a bug report: version, platform, endpoint,
   // the TLS/pin summary, the staged steps with timings and the error class.
   // No token, password, auth header or certificate body can reach it.
-  function diagnosticsBundle(instance) {
+  function diagnosticsBundle(instance, verbose = instance.diag.verbose) {
     const config = instance.config || {}, secrets = instanceSecrets(instance), failure = instance.diag.last;
     return {
       schema: "e64-diagnostics/1",
@@ -480,8 +480,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
       stages: instance.diag.steps.slice(),
       error: failure ? {class: failure.stage, code: failure.code || null, status: failure.status || null,
         expected: failure.expected, observed: redactForReport(failure.observed, secrets), next: failure.next} : null,
-      lastFailure: instance.diag.lastFailure ? {class: instance.diag.lastFailure.class, message: instance.diag.lastFailure.message,
-        code: instance.diag.lastFailure.code, at: instance.diag.lastFailure.at} : null,
+      lastFailure: instance.diag.lastFailure ? {class: instance.diag.lastFailure.class, at: instance.diag.lastFailure.at,
+        ...(verbose ? {message: instance.diag.lastFailure.message, code: instance.diag.lastFailure.code} : {})} : null,
       redaction: "tokens, Owner passwords, auth headers and certificate bodies are removed before anything is returned"
     };
   }
@@ -645,6 +645,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     });
     if (Object.keys(tokens).some((id) => !ids.has(id))) fail("TokensJson contains an unknown id");
     if (Object.keys(passwords).some((id) => !ids.has(id))) fail("PasswordsJson contains an unknown id");
+    if (Object.keys(localApiTokens).some((id) => !ids.has(id))) fail("ApiTokensJson contains an unknown id");
     return result;
   }
 
@@ -1124,7 +1125,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   }
   function queueLogDownload(instance, delayMs) {
     const log = instance.grindLog;
-    if (!instance.connected || !instance.config.mintTokens || log.status === "unsupported-host") return;
+    if (!instance.connected || !(instance.config.mintTokens || hasLocalApi(instance.config)) || log.status === "unsupported-host") return;
     // A refusal (401/403) cannot be fixed by retrying the same token: park the log
     // until the next connection or configuration change.
     if (log.retryable === false) return;
@@ -1164,6 +1165,12 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
         } catch (error) {
           localError = error;
         }
+      }
+      // The ZIP needs the fork's base64 fetch and a minted login. Without it a
+      // Local API error is an ordinary failure, retried and backed off as such.
+      if (!FORK_BUILD || !config.mintTokens) {
+        if (localError) throw localError;
+        log.status = "unsupported-host"; log.lastError = GATED.base64; return;
       }
       if (!await downloadLogsZip(instance, config)) { log.status = "unsupported-host"; log.lastError = GATED.base64; return; }
       markLogOk(log);
@@ -1265,7 +1272,7 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     const headers = {"Content-Type": "application/json", "X-E64-Local-Token": config.localApiToken};
     if (instance.restCookie) headers.Cookie = "PHPSESSID=" + instance.restCookie;
     const pin = pinOption(config.certSha256);
-    const fetchJson = (route, body = {}) => fetchLogRequest(localApiUrl(config, route), {
+    const fetchJson = (route, body = {}) => fetchLogRequest(restUrl(config, route), {
       method: "POST", body: JSON.stringify(body),
       headers, ...pin
     }, "local api");
@@ -1274,20 +1281,15 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     if (!response || !response.ok) throw localApiStatusError("grind_log", response);
     let data = await response.json();
     if (!data || !data.success || !data.data || !data.data.rows) throw new Error("local api grind_log: " + localApiText(data && data.error));
-    const rows = data.data.rows.map((row) => {
-      // Convert Local API row format to CSV-like format for grindRows compatibility
-      const flat = {};
-      for (const [key, value] of Object.entries(row)) {
-        flat[key] = value !== null && value !== undefined ? String(value) : "";
-      }
-      return flat;
-    });
+    // The same string-valued rows, newest first and capped, as grindRows gives the CSV path.
+    const rows = data.data.rows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, value === null || value === undefined ? "" : String(value)])))
+      .sort((a, b) => Number(b.grind_id) - Number(a.grind_id)).slice(0, 20);
     // Process grind log rows
     for (const grind of instance.grindEvents) {
       if (grind.grindUuid) continue;
-      const row = matchGrindRowLocalApi(instance, grind, rows);
+      const row = matchGrindRow(instance, grind, rows);
       if (!row) continue;
-      applyGrindRowLocalApi(grind, row);
+      applyGrindRow(grind, row);
       if (grind.doseShot) writeShotGrind(grind, false).catch(() => {});
     }
     // Fetch service_log
@@ -1297,34 +1299,8 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     if (!data || !data.success || !data.data || !data.data.rows) throw new Error("local api service_log: " + localApiText(data && data.error));
     mergeServiceRowsLocalApi(instance, data.data.rows);
   }
-  function matchGrindRowLocalApi(instance, grind, rows) {
-    const used = new Set(instance.grindEvents.map((event) => event.grindUuid).filter(Boolean));
-    return rows.find((row) => {
-      if (!row.grind_uuid || used.has(row.grind_uuid)) return false;
-      const amount = Number(row.recipe_amount) / 1000;
-      if (grind.targetWeightGr && Number.isFinite(amount) && amount > 0 && Math.abs(amount - grind.targetWeightGr) > 0.5) return false;
-      const m = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(row.grind_date_time || "");
-      return !m || Math.abs(new Date(+m[1], m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() - grind.completedAtMs) <= LOG_MATCH_MS;
-    }) || null;
-  }
-  function applyGrindRowLocalApi(grind, row) {
-    const num = (key, scale = 1) => row[key] === undefined || row[key] === "" || !Number.isFinite(Number(row[key])) ? null : Number(row[key]) / scale;
-    const um = (key) => { const dum = num(key); return dum === null ? null : String(Math.floor((dum + 5) / 10)); };
-    const text = (key) => typeof row[key] === "string" && row[key] !== "" ? row[key].slice(0, 128) : null;
-    grind.grindUuid = text("grind_uuid");
-    grind.trigger = text("grind_trigger");
-    grind.log = {grindWeightGr: num("grind_weight", 1000), grindDurationMs: num("grind_duration"), setting: um("grind_ddd"),
-      successful: row.grind_successfull === undefined ? null : row.grind_successfull === "1" || row.grind_successfull === "true"};
-    grind.recipe = {index: num("recipe_index"), uuid: text("recipe_uuid"), mode: text("recipe_mode"), type: text("recipe_type"),
-      amountGr: num("recipe_amount", 1000), setting: um("recipe_coarseness"), brewTimeMs: num("recipe_brew_time"), brewWeightGr: num("recipe_brew_weight", 1000),
-      icon: text("recipe_icon"), gbsEnabled: row.recipe_gbs_enabled === undefined || row.recipe_gbs_enabled === "" ? null : row.recipe_gbs_enabled === "1" || row.recipe_gbs_enabled === "true"};
-  }
   function mergeServiceRowsLocalApi(instance, rows) {
     const byId = new Map();
-    const index = (name) => {
-      const idx = ["event_id", "event_type_id", "event_type", "event_date_time", "event_details"].indexOf(name);
-      return idx >= 0 ? idx : -1;
-    };
     for (const row of rows) {
       const id = Number(row.event_id);
       if (!Number.isSafeInteger(id) || id < 0) continue;
@@ -1359,9 +1335,6 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
     instance.serviceRows = Array.from(byId.values()).sort((a, b) => a.id - b.id).slice(-MAX_SERVICE_ROWS);
   }
   function restUrl(config, route) {
-    return "https://" + hostName(config) + (config.restPort === 443 ? "" : ":" + config.restPort) + "/rest_api/" + route;
-  }
-  function localApiUrl(config, route) {
     return "https://" + hostName(config) + (config.restPort === 443 ? "" : ":" + config.restPort) + "/rest_api/" + route;
   }
   function hasLocalApi(config) {
@@ -1885,7 +1858,10 @@ const PLUGIN_UI = {"version":1,"sha256":{"css":"e725294a0884b0db871d778596bf065d
   async function setupAction(body) {
     const draft = body && typeof body === "object" ? body : {};
     if (draft.action === "check") return {status: 200, payload: {errors: validate(draft.settings).errors}};
-    if (draft.action === "validate") return {status: 200, payload: {fields: validateSetupFields(draft)}};
+    if (draft.action === "validate") {
+      const parsed = typeof draft.certSha256 === "string" && draft.certSha256 ? parseFingerprint(draft.certSha256) : null;
+      return {status: 200, payload: {fields: validateSetupFields(draft), ...(parsed && parsed.ok ? {certSha256: parsed.hex} : {})}};
+    }
     const fields = validateSetupFields(draft);
     if (fields.host) return {status: 400, payload: {error: "host", fields, message: fields.host}};
     if (fields.port) return {status: 400, payload: {error: "port", fields, message: fields.port}};
@@ -2089,7 +2065,7 @@ $("trust").addEventListener("click", async () => {
   if (!pasted) return say($("certOut"), "error", "Paste the SHA-256 fingerprint from the command shown above.");
   const checked = await post({action: "validate", ...target(), name: $("name").value.trim(), certSha256: pasted});
   if (checked.fields && checked.fields.certSha256) return say($("certOut"), "error", checked.fields.certSha256);
-  const pin = pasted.replace(/[^0-9a-f]/gi, "").toLowerCase();
+  const pin = checked.certSha256;
   if (!state.offered && !$("trust").dataset.confirm) { $("trust").dataset.confirm = "1"; $("trust").textContent = "Trust anyway"; return say($("certOut"), "warn", "Tap again to trust this certificate."); }
   state.certSha256 = pin; say($("certOut"), "ok", "Trusted: " + pu.fingerprint(pin));
 });
@@ -2138,10 +2114,12 @@ pu.wizard($("page"), async (index) => {
     const invalid = Object.keys(fields).filter((name) => name !== "certSha256");
     if (invalid.length) { say($("hostOut"), "error", fields[invalid[0]]); return false; }
     say($("hostOut"), "error", ""); passwordHint();
-    const reached = await probeCert();
+    await probeCert();
     // Reachability is verified before the assistant claims anything: a grinder
     // that refused the connection is not a grinder with an unknown certificate.
-    if (!reached && state.reached !== "pin-unsupported") return false;
+    // An unknown certificate or a host that cannot pin moves on to the
+    // certificate step, where the fingerprint is pasted and trusted.
+    if (["dns", "refused", "unreachable", "timeout"].includes(state.reached)) { say($("hostOut"), "error", $("certOut").textContent); return false; }
     return true;
   }
   if (index === 2 && !state.certSha256) { say($("certOut"), "error", "Trust the certificate to continue: paste its fingerprint, then tap Trust."); return false; }
@@ -2322,7 +2300,7 @@ load();
       if (operation === "xenia") return Promise.resolve(jsonResponse(200, xeniaRead(instance)));
       if (operation === "control") return Promise.resolve(jsonResponse(200, instance.control));
       if (operation === "inventory") { const {syncing, ...inventory} = instance.inventory; return Promise.resolve(jsonResponse(200, inventory)); }
-      if (operation === "diagnostics") return Promise.resolve(jsonResponse(200, diagnosticsBundle(instance, request.query.verbose === "1")));
+      if (operation === "diagnostics") return Promise.resolve(jsonResponse(200, diagnosticsBundle(instance, instance.diag.verbose || request.query.verbose === "1")));
       if (operation === "stages") return Promise.resolve(jsonResponse(200, {verbose: instance.diag.verbose || request.query.verbose === "1", lines: stageLines(instance, instance.diag.verbose || request.query.verbose === "1")}));
       if (operation === "connection") {
         const failure = instance.diag.last;

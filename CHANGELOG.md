@@ -5,6 +5,30 @@ Every release of this plugin, newest first. The version here is the version in
 `scripts/package-plugin.py --tag` refuses anything else, so a tag cannot
 describe a different build than the one it publishes.
 
+## 0.8.1 — 2026-11-27
+
+A fix release from a review of 0.8.0. No setting key moved.
+
+- **Setup assistant:** a grinder whose certificate is not the fleet one, or a
+  host that cannot pin (upstream Decaid), no longer blocks the address step.
+  Only an unreachable grinder (DNS, refused, no route, timeout) stops there,
+  and the reason now shows on that step. In 0.8.0 only the fleet certificate
+  got past it.
+- **Setup assistant:** "Trust" stores the fingerprint the plugin parsed. A
+  pasted `sha256 Fingerprint=AB:…` line no longer turns the label's letters
+  into a 70-character pin that every later save rejected.
+- **Upstream channel, Local API:** a Local API error is an ordinary, retried
+  failure. 0.8.0 fell back to the vendor ZIP (which upstream Decaid cannot
+  read), which made the grinder build a machine-log ZIP for nothing and parked
+  the log as `unsupported-host` until the next connection.
+- **Local API without MintTokens:** a static-token setup with `UseLocalApi` now
+  reads the grinder log; 0.8.0 skipped it.
+- **Diagnostics:** with `DebugLog` off the bundle keeps the stage, class and
+  timing of the last failure only, as the setting says. `ApiTokensJson` rejects
+  ids that no instance has, like `TokensJson` and `PasswordsJson`.
+- **Internal:** the Local API path reuses the CSV path's row matcher and
+  parser, so it now matches the newest rows first.
+
 ## 0.8.0 — 2026-11-26
 
 A feature release, not a patch: the Local API log path becomes usable rather

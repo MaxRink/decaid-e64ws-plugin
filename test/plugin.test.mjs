@@ -9,11 +9,13 @@ import {decaidApi, hostFetch} from './support/sim-host.mjs';
 // E64_PLUGIN_SOURCE lets CI run the whole suite against a packaged artefact,
 // so the ZIP/responseType and pin paths are proven on the shipped file.
 const source = fs.readFileSync(process.env.E64_PLUGIN_SOURCE || new URL('../plugin.js', import.meta.url), 'utf8');
-function load(settings, fixture, timers = {}, fetchImpl = null) {
+// The same source as the upstream release channel bakes it.
+const upstreamSource = source.replace(/const PLUGIN_CHANNEL = "fork";/, 'const PLUGIN_CHANNEL = "upstream";');
+function load(settings, fixture, timers = {}, fetchImpl = null, pluginSource = source) {
   const registrations = [];
   const host = {devices: {register(definition, handlers) { registrations.push({definition, handlers}); return Promise.resolve({deviceId: `plugin:mahlkoenig-e64.reaplugin:e64:${definition.instanceId}`}); }}};
   const sandbox = {setTimeout, clearTimeout, Promise, Map, Set, JSON, Object, Number, Array, Error, encodeURIComponent, btoa: globalThis.btoa, ...(fetchImpl ? {fetch: fetchImpl} : {}), ...timers};
-  vm.runInNewContext(`globalThis.createPlugin = (${source}\n);`, sandbox);
+  vm.runInNewContext(`globalThis.createPlugin = (${pluginSource}\n);`, sandbox);
   const plugin = sandbox.createPlugin(host);
   // Inventory sync has its own tests; elsewhere it would add a RequestNachineInfo to every connect.
   const effective = settings && !('PopulateGrinderRecord' in settings) ? {...settings, PopulateGrinderRecord: 'false'} : settings;
@@ -818,7 +820,7 @@ test('csv parser handles quotes, escaped quotes, CRLF and semicolons', async () 
 });
 
 async function logHarness({zip, failDownloads = false, binary = true, refuse = () => false, hang = () => false,
-  route = () => null, extraSettings = {}, apiToken = null, abort = false} = {}) {
+  route = () => null, extraSettings = {}, apiToken = null, abort = false, upstream = false} = {}) {
   let now = Date.parse('2026-11-23T12:00:00Z');
   class FakeDate extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const pending = new Map(); let nextTimer = 0;
@@ -842,7 +844,8 @@ async function logHarness({zip, failDownloads = false, binary = true, refuse = (
   };
   const fixture = {sent: [], events: []};
   const loaded = await load({InstancesJson: one('127.0.0.1', {pollMs: 100, restPort: 8443}), TokensJson: '{}', MintTokens: 'true', PasswordsJson: JSON.stringify({one: {host: '127.0.0.1', password: 'pw'}}),
-    ...(apiToken ? {UseLocalApi: 'true', ApiTokensJson: JSON.stringify({one: {host: '127.0.0.1', token: apiToken}})} : {}), ...extraSettings}, fixture, timers, fetchImpl);
+    ...(apiToken ? {UseLocalApi: 'true', ApiTokensJson: JSON.stringify({one: {host: '127.0.0.1', token: apiToken}})} : {}), ...extraSettings}, fixture, timers, fetchImpl,
+    upstream ? upstreamSource : source);
   const settle = async () => {
     for (let i = 0; i < 8; i++) {
       await new Promise(resolve => setImmediate(resolve));
@@ -1005,6 +1008,25 @@ test('a Local API failure still tries the vendor ZIP once before counting a fail
   assert.equal(log.status, 'ok', 'the fallback succeeded');
   assert.equal(log.failures, 0, 'a successful fallback is not a failure');
   assert.equal(JSON.parse(h.service().body).rows.length, 1, 'the fallback still fills the service log');
+  await h.loaded.plugin.onUnload();
+});
+
+test('upstream channel: a Local API error is retried, never parked as an unsupported host', async () => {
+  assert.notEqual(upstreamSource, source, 'the channel constant was rewritten');
+  let refuse = true;
+  const h = await logHarness({zip: Buffer.alloc(0), apiToken: 'owner-token', upstream: true,
+    route: (url) => refuse && url.endsWith('/rest_api/grind_log') ? localJson({success: false, error: 'busy'}, 503) : null});
+  await h.connect();
+  await h.grind();
+  assert.equal(h.localCalls('grind_log').length, 1);
+  assert.equal(h.downloads(), 0, 'no vendor ZIP on a host that cannot return one');
+  const log = h.events().log;
+  assert.equal(log.status, 'failed', 'an ordinary failure, not unsupported-host');
+  assert.equal(log.failures, 1);
+  refuse = false;
+  await h.advance(6 * 3600000 + 1);
+  assert.equal(h.localCalls('grind_log').length, 2, 'the Local API is asked again');
+  assert.equal(h.events().log.status, 'ok');
   await h.loaded.plugin.onUnload();
 });
 
@@ -2006,7 +2028,9 @@ test('the setup assistant validates every field separately', async () => {
   assert.match(body.fields.restPort, /443|1 and 65535/);
   assert.match(body.fields.name, /128/);
   assert.match(body.fields.certSha256, /64 hex/);
-  assert.deepEqual((await validate({host: '192.168.1.40', port: 9997, restPort: 443, name: 'E64', certSha256: PIN}))[1], {fields: {}});
+  assert.deepEqual((await validate({host: '192.168.1.40', port: 9997, restPort: 443, name: 'E64', certSha256: PIN}))[1], {fields: {}, certSha256: PIN_HEX});
+  // The pin the page stores is the parsed one, never the label's letters.
+  assert.equal((await validate({host: '192.168.1.40', port: 9997, restPort: 443, name: 'E64', certSha256: 'sha256 Fingerprint=' + PIN}))[1].certSha256, PIN_HEX);
   await loaded.plugin.onUnload();
 });
 

@@ -12,10 +12,11 @@ const base = '/api/v1/plugins/mahlkoenig-e64.reaplugin';
 
 // The grinder as plugin fetch sees it: the fleet certificate and Owner password "right".
 // `grinderOffline` makes it refuse the TCP connection instead, for the reachability test.
-let grinderOffline = false;
+// `grinderCert` swaps in a certificate that is not the fleet one.
+let grinderOffline = false, grinderCert = FLEET;
 async function grinderFetch(url, init = {}) {
   if (grinderOffline) throw new Error('connect ECONNREFUSED 192.168.1.40:443');
-  if (init.tlsPinSha256 !== FLEET) throw new Error('HandshakeException');
+  if (init.tlsPinSha256 !== grinderCert) throw new Error('HandshakeException');
   if (url.endsWith('/rest_api/ping')) return {ok: true, status: 200, headers: {get: () => null}, text: async () => 'expired'};
   const ok = JSON.parse(init.body || '{}').password === 'right';
   return {ok, status: ok ? 200 : 400, headers: {get: (name) => ok && name === 'authorization' ? 'Bearer t' : null}, text: async () => ''};
@@ -139,6 +140,24 @@ test('an unreachable grinder stops the assistant and says why', async ({page}) =
     await expect(page.getByRole('heading', {name: 'Trust the grinder\'s certificate'})).toHaveCount(0);
     expect(await page.evaluate(() => document.querySelectorAll('[data-pu-step]:not([hidden]) h2')[0].textContent)).toContain('Find your grinder');
   } finally { grinderOffline = false; }
+});
+
+test('a grinder with its own certificate reaches the trust step and takes a pasted openssl line', async ({page}) => {
+  host.store.settings = {}; host.store.saves.length = 0; await host.reload();
+  const own = 'ab'.repeat(32), grouped = own.toUpperCase().replace(/(..)(?!$)/g, '$1:');
+  grinderCert = own;
+  try {
+    await page.goto(`${origin}${base}/setup`);
+    const next = page.locator('[data-pu-next]');
+    await next.click();
+    await page.locator('#host').fill('192.168.1.40');
+    await next.click();
+    await expect(page.getByRole('heading', {name: 'Trust the grinder\'s certificate'})).toBeVisible();
+    await page.locator('#paste').fill('sha256 Fingerprint=' + grouped);
+    await page.locator('#trust').click();
+    await page.locator('#trust').click();
+    await expect(page.locator('#certOut')).toContainText('Trusted: ' + grouped);
+  } finally { grinderCert = FLEET; }
 });
 
 test('reopening keeps the saved password and asks again when the address changes', async ({page}) => {
